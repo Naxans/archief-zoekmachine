@@ -18,7 +18,7 @@ In de Streamlit Cloud instellingen (`Settings > Secrets`) staan de toegangssleut
 De app is ingesloten op Google Sites via **Invoegen > Insluiten > Insluitcode**:
 ```html
 <iframe 
-    src="[https://archief-zoekmachine-ucgmgwfxzpvtvr9zk7mmvk.streamlit.app/?embed=true](https://archief-zoekmachine-ucgmgwfxzpvtvr9zk7mmvk.streamlit.app/?embed=true)" 
+    src="https://archief-zoekmachine-ucgmgwfxzpvtvr9zk7mmvk.streamlit.app/?embed=true" 
     width="100%" 
     height="850px" 
     style="border:none;">

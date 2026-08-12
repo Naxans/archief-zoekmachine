@@ -7,7 +7,9 @@ from googleapiclient.discovery import build
 from google import genai
 from google.genai import types
 
+# ------------------------------------------------------------------------------
 # 1. AUTHENTICATIE VIA STREAMLIT SECRETS
+# ------------------------------------------------------------------------------
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
@@ -30,10 +32,12 @@ except Exception as e:
     st.error(f"Fout bij verbinden met Google/Gemini diensten: {e}")
     st.stop()
 
+# ------------------------------------------------------------------------------
 # 2. CONFIGURATIE
+# ------------------------------------------------------------------------------
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
-MODEL_NAAM = 'gemini-flash-lite-latest'
+MODEL_NAAM = 'gemini-2.0-flash'
 
 # Session state voor chatsessie
 if "actieve_chat" not in st.session_state:
@@ -41,7 +45,9 @@ if "actieve_chat" not in st.session_state:
 if "chat_historie" not in st.session_state:
     st.session_state.chat_historie = []
 
+# ------------------------------------------------------------------------------
 # 3. STREAMLIT INTERFACE
+# ------------------------------------------------------------------------------
 st.set_page_config(page_title="Archief Zoekmachine", page_icon="🔍", layout="wide")
 st.title("🔍 Archief Zoekmachine")
 
@@ -58,13 +64,16 @@ with st.form(key="onderzoek_form"):
     
     submit_button = st.form_submit_button(label="Voer onderzoek uit", type="primary")
 
+# ------------------------------------------------------------------------------
 # 4. ONDERZOEKSLOGICA
+# ------------------------------------------------------------------------------
 if submit_button:
     if not onderzoeksvraag.strip():
         st.warning("Voer a.u.b. een onderzoeksvraag in.")
     else:
         st.session_state.chat_historie = []
         
+        # STAP 1: Inhoudsopgave scannen
         with st.spinner("Stap 1/3: Inhoudsopgave (Google Sheet) scannen..."):
             try:
                 sh = gc.open(SHEET_NAAM)
@@ -104,12 +113,15 @@ if submit_button:
             Geef UITSLAUITEND de bestandsnamen terug gescheiden door komma's. Geen extra tekst.
             """
 
-            res_filter = ai_client.models.generate_content(
-                model=MODEL_NAAM,
-                contents=filter_prompt
-            )
-
-            geselecteerde_bestanden = [b.strip() for b in res_filter.text.split(',') if b.strip()]
+            try:
+                res_filter = ai_client.models.generate_content(
+                    model=MODEL_NAAM,
+                    contents=filter_prompt
+                )
+                geselecteerde_bestanden = [b.strip() for b in res_filter.text.split(',') if b.strip()]
+            except Exception as e:
+                st.error(f"Fout tijdens het scannen van de index via Gemini: {e}")
+                st.stop()
 
         st.subheader("Geselecteerde bronnen:")
         st.write(geselecteerde_bestanden)
@@ -118,6 +130,7 @@ if submit_button:
             st.warning("Geen relevante bestanden gevonden op basis van de zoekopdracht.")
             st.stop()
 
+        # STAP 2: Originele documenten ophalen
         with st.spinner("Stap 2/3: Originele documenten ophalen uit Google Drive..."):
             alle_drive_bestanden = {}
             page_token = None
@@ -144,7 +157,7 @@ INSTRUCTIES VOOR JE RAPPORT:
 1. Richt je specifiek op de gevraagde firma, personen en periode.
 2. Structureer je antwoord helder (bijv. per jaar of per onderwerp).
 3. Vermeld alle concrete namen, functies, cijfers en details die op de documenten staan.
-4. Citeer steeds de bestandsnaam (bijv. 'staatsblad1935-10-blz296.jpg') wanneer je naar specifieke informatie verwijst.
+4. Citeer steeds de bestandsnaam wanneer je naar specifieke informatie verwijst.
 5. Trek een heldere conclusie als antwoord op de vraag.
 """
             ]
@@ -169,10 +182,11 @@ INSTRUCTIES VOOR JE RAPPORT:
                             if img.mode != 'RGB':
                                 img = img.convert('RGB')
                             
-                            img.thumbnail((1200, 1200))
+                            # Schalen naar lichter formaat om API-limieten te vermijden
+                            img.thumbnail((800, 800))
 
                             img_byte_arr = io.BytesIO()
-                            img.save(img_byte_arr, format='JPEG', quality=85)
+                            img.save(img_byte_arr, format='JPEG', quality=70)
 
                             img_part = types.Part.from_bytes(
                                 data=img_byte_arr.getvalue(),
@@ -189,12 +203,19 @@ INSTRUCTIES VOOR JE RAPPORT:
             st.error("De geselecteerde bestanden konden niet worden teruggevonden in Google Drive.")
             st.stop()
 
+        # STAP 3: Analyse uitvoeren
         with st.spinner("Stap 3/3: Analyse uitvoeren via Gemini..."):
-            st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
-            analyse_response = st.session_state.actieve_chat.send_message(onderzoeks_payload)
-            st.session_state.chat_historie.append(("assistant", analyse_response.text))
+            try:
+                st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
+                analyse_response = st.session_state.actieve_chat.send_message(onderzoeks_payload)
+                st.session_state.chat_historie.append(("assistant", analyse_response.text))
+            except Exception as e:
+                st.error(f"Fout tijdens Gemini analyse: {e}")
+                st.info("💡 Tip: Probeer 'Max bronnen' te verlagen naar bijvoorbeeld 3 tot 5 bronnen.")
 
+# ------------------------------------------------------------------------------
 # 5. WEERGAVE RESULTAAT & CHAT
+# ------------------------------------------------------------------------------
 if st.session_state.chat_historie:
     st.divider()
     st.subheader("📑 Historisch Onderzoeksrapport")
@@ -211,6 +232,9 @@ if st.session_state.chat_historie:
             
         with st.chat_message("assistant"):
             with st.spinner("Analyseren..."):
-                response = st.session_state.actieve_chat.send_message(vervolgvraag)
-                st.write(response.text)
-                st.session_state.chat_historie.append(("assistant", response.text))
+                try:
+                    response = st.session_state.actieve_chat.send_message(vervolgvraag)
+                    st.write(response.text)
+                    st.session_state.chat_historie.append(("assistant", response.text))
+                except Exception as e:
+                    st.error(f"Fout bij verwerken vervolgvraag: {e}")

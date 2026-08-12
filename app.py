@@ -33,11 +33,39 @@ except Exception as e:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 2. CONFIGURATIE
+# 2. AUTOMATISCHE MODEL-DETECTIE
 # ------------------------------------------------------------------------------
-DRIVE_MAP_NAAM = "archieven"
-SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
-MODEL_NAAM = 'gemini-1.5-flash'
+@st.cache_resource
+def bepaal_actief_model(_client):
+    """Detecteert automatisch welk Gemini-model beschikbaar is voor jouw API-key."""
+    try:
+        beschikbare_modellen = [m.name.replace("models/", "") for m in _client.models.list()]
+        
+        # Voorkeursvolgorde van nieuwe naar oudere modellen
+        voorkeur = [
+            'gemini-2.5-flash',
+            'gemini-2.0-flash',
+            'gemini-1.5-flash-latest',
+            'gemini-1.5-flash',
+            'gemini-2.5-pro',
+            'gemini-1.5-pro'
+        ]
+        
+        for m in voorkeur:
+            if m in beschikbare_modellen:
+                return m
+                
+        # Als geen van de voorkeursmodellen in de lijst staat, kies de eerste 'flash' optie
+        for m in beschikbare_modellen:
+            if 'flash' in m or 'gemini' in m:
+                return m
+                
+        return beschikbare_modellen[0]
+    except Exception:
+        # Fallback als het ophalen van de lijst faalt
+        return 'gemini-2.5-flash'
+
+MODEL_NAAM = bepaal_actief_model(ai_client)
 
 # Session state voor chatsessie
 if "actieve_chat" not in st.session_state:
@@ -50,6 +78,7 @@ if "chat_historie" not in st.session_state:
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="Archief Zoekmachine", page_icon="🔍", layout="wide")
 st.title("🔍 Archief Zoekmachine")
+st.caption(f"Actief AI-model: `{MODEL_NAAM}`")
 
 # Invoerformulier
 with st.form(key="onderzoek_form"):
@@ -120,7 +149,7 @@ if submit_button:
                 )
                 geselecteerde_bestanden = [b.strip() for b in res_filter.text.split(',') if b.strip()]
             except Exception as e:
-                st.error(f"Fout tijdens het scannen van de index via Gemini: {e}")
+                st.error(f"Fout tijdens het scannen van de index via Gemini ({MODEL_NAAM}): {e}")
                 st.stop()
 
         st.subheader("Geselecteerde bronnen:")
@@ -182,7 +211,6 @@ INSTRUCTIES VOOR JE RAPPORT:
                             if img.mode != 'RGB':
                                 img = img.convert('RGB')
                             
-                            # Schalen naar lichter formaat om API-limieten te vermijden
                             img.thumbnail((800, 800))
 
                             img_byte_arr = io.BytesIO()

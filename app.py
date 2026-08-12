@@ -33,39 +33,49 @@ except Exception as e:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 2. CONFIGURATIE & AUTOMATISCHE MODEL-DETECTIE
+# 2. CONFIGURATIE & DYNAMISCHE MODEL-TEST
 # ------------------------------------------------------------------------------
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
 @st.cache_resource
-def bepaal_actief_model(_client):
-    """Detecteert automatisch welk Gemini-model beschikbaar is voor jouw API-key."""
-    try:
-        beschikbare_modellen = [m.name.replace("models/", "") for m in _client.models.list()]
-        
-        voorkeur = [
-            'gemini-2.5-flash',
-            'gemini-2.0-flash',
-            'gemini-1.5-flash-latest',
-            'gemini-1.5-flash',
-            'gemini-2.5-pro',
-            'gemini-1.5-pro'
-        ]
-        
-        for m in voorkeur:
-            if m in beschikbare_modellen:
-                return m
-                
-        for m in beschikbare_modellen:
-            if 'flash' in m or 'gemini' in m:
-                return m
-                
-        return beschikbare_modellen[0]
-    except Exception:
-        return 'gemini-2.5-flash'
+def bepaal_werkend_model(_client):
+    """Test live welke Gemini-modellen reageren op jouw API-key en kiest de eerste werkende."""
+    kandidaten = [
+        'gemini-1.5-flash',
+        'gemini-2.0-flash',
+        'gemini-1.5-pro',
+        'gemini-2.0-flash-lite',
+        'gemini-1.5-flash-8b',
+        'gemini-2.0-flash-exp'
+    ]
+    
+    # Test elke kandidaat met een mini-prompt
+    for model_naam in kandidaten:
+        try:
+            _client.models.generate_content(
+                model=model_naam,
+                contents="ping"
+            )
+            return model_naam
+        except Exception:
+            continue
 
-MODEL_NAAM = bepaal_actief_model(ai_client)
+    # Als de voorkeurslijst faalt, vraag de beschikbare modellen op bij Google
+    try:
+        for m in _client.models.list():
+            m_naam = m.name.replace("models/", "")
+            try:
+                _client.models.generate_content(model=m_naam, contents="ping")
+                return m_naam
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    return 'gemini-1.5-flash'
+
+MODEL_NAAM = bepaal_werkend_model(ai_client)
 
 # Session state voor chatsessie
 if "actieve_chat" not in st.session_state:

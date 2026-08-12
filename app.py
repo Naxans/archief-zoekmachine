@@ -37,7 +37,7 @@ except Exception as e:
 # ------------------------------------------------------------------------------
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
-MODEL_NAAM = 'gemini-2.0-flash'
+MODEL_NAAM = 'gemini-1.5-flash'
 
 # Session state voor chatsessie
 if "actieve_chat" not in st.session_state:

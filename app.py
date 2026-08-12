@@ -48,7 +48,6 @@ def bepaal_werkend_model(client):
         'gemini-1.5-pro-002'
     ]
     
-    # Haal daarnaast de dynamische lijst van Google op
     try:
         voorradig = [m.name.replace("models/", "") for m in client.models.list()]
         for m in voorradig:
@@ -57,7 +56,6 @@ def bepaal_werkend_model(client):
     except Exception:
         pass
 
-    # Test de kandidaten één voor één
     for model_naam in kandidaten:
         try:
             client.models.generate_content(model=model_naam, contents="ping")
@@ -104,9 +102,11 @@ else:
 with st.form(key="onderzoek_form"):
     col1, col2 = st.columns([3, 1])
     with col1:
-        onderzoeksvraag = st.text_input(
+        # st.text_area zorgt ervoor dat lange teksten automatisch over meerdere regels lopen
+        onderzoeksvraag = st.text_area(
             "Vraag:",
-            placeholder='Bijv: Geef me de bestuursleden van de firma "Radio Belge de Construction" in het jaar 1935'
+            placeholder='Bijv: Geef me de bestuursleden van de firma "Radio Belge de Construction" in het jaar 1935',
+            height=100
         )
     with col2:
         max_bestanden = st.slider("Max bronnen:", min_value=5, max_value=50, value=15, step=5)
@@ -143,7 +143,6 @@ if submit_button:
 
             index_tekst = "\n".join(index_regels)
             
-            # Voorkom overschrijden van de maximale inputgrootte
             if len(index_tekst) > 40000:
                 index_tekst = index_tekst[:40000]
 
@@ -172,7 +171,8 @@ if submit_button:
                 st.stop()
 
         st.subheader("Geselecteerde bronnen:")
-        st.write(geselecteerde_bestanden)
+        for b in geselecteerde_bestanden:
+            st.markdown(f"- `{b}`")
 
         if not geselecteerde_bestanden:
             st.warning("Geen relevante bestanden gevonden op basis van de zoekopdracht.")

@@ -34,26 +34,38 @@ except Exception as e:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 2. CONFIGURATIE & MODEL-DETECTIE
+# 2. CONFIGURATIE & DYNAMISCHE MODEL-DETECTIE
 # ------------------------------------------------------------------------------
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
-@st.cache_resource
-def bepaal_werkend_model(_client):
+def bepaal_werkend_model(client):
+    """Vraagt actieve modellen op bij Google en test welke daadwerkelijk werkt."""
     kandidaten = [
-        'gemini-1.5-flash',
         'gemini-2.0-flash',
-        'gemini-1.5-pro',
-        'gemini-2.0-flash-lite'
+        'gemini-2.0-flash-lite',
+        'gemini-1.5-flash-002',
+        'gemini-1.5-pro-002'
     ]
+    
+    # Haal daarnaast de dynamische lijst van Google op
+    try:
+        voorradig = [m.name.replace("models/", "") for m in client.models.list()]
+        for m in voorradig:
+            if m not in kandidaten and 'gemini' in m:
+                kandidaten.append(m)
+    except Exception:
+        pass
+
+    # Test de kandidaten één voor één
     for model_naam in kandidaten:
         try:
-            _client.models.generate_content(model=model_naam, contents="ping")
+            client.models.generate_content(model=model_naam, contents="ping")
             return model_naam
         except Exception:
             continue
-    return 'gemini-1.5-flash'
+
+    return None
 
 MODEL_NAAM = bepaal_werkend_model(ai_client)
 
@@ -66,7 +78,7 @@ def genereer_met_retry(client, model, contents, max_retries=3):
             err_msg = str(e)
             if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
                 if poging < max_retries - 1:
-                    time.sleep(12)  # Wacht 12 seconden voor de volgende poging
+                    time.sleep(12)
                     continue
             raise e
 
@@ -81,7 +93,12 @@ if "chat_historie" not in st.session_state:
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="Archief Zoekmachine", page_icon="🔍", layout="wide")
 st.title("🔍 Archief Zoekmachine")
-st.caption(f"Actief AI-model: `{MODEL_NAAM}`")
+
+if MODEL_NAAM:
+    st.caption(f"Actief AI-model: `{MODEL_NAAM}`")
+else:
+    st.error("Kon geen werkend Gemini-model vinden voor deze API-sleutel. Controleer je Gemini API key.")
+    st.stop()
 
 # Invoerformulier
 with st.form(key="onderzoek_form"):
@@ -126,7 +143,7 @@ if submit_button:
 
             index_tekst = "\n".join(index_regels)
             
-            # Voorkom dat de prompt langer is dan ~40.000 tekens (ca. 10.000 tokens)
+            # Voorkom overschrijden van de maximale inputgrootte
             if len(index_tekst) > 40000:
                 index_tekst = index_tekst[:40000]
 
@@ -149,8 +166,9 @@ if submit_button:
                 res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
                 geselecteerde_bestanden = [b.strip() for b in res_filter.text.split(',') if b.strip()]
             except Exception as e:
-                st.error(f"Fout tijdens het scannen van de index: {e}")
-                st.info("💡 De API is momenteel druk bezet. Wacht circa 30 seconden en probeer het nogmaals.")
+                st.error(f"Fout tijdens het scannen van de index ({MODEL_NAAM}): {e}")
+                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                    st.info("💡 De API is momenteel druk bezet. Wacht circa 30 seconden en probeer het nogmaals.")
                 st.stop()
 
         st.subheader("Geselecteerde bronnen:")
@@ -240,7 +258,7 @@ INSTRUCTIES VOOR JE RAPPORT:
                 st.session_state.chat_historie.append(("assistant", analyse_response.text))
             except Exception as e:
                 st.error(f"Fout tijdens Gemini analyse: {e}")
-                st.info("💡 Tip: Probeer 'Max bronnen' te verlagen naar bijvoorbeeld 3 tot 5 bronnen om binnen de limieten te blijven.")
+                st.info("💡 Tip: Probeer 'Max bronnen' te verlagen naar bijv. 3 tot 5 bronnen om binnen de limieten te blijven.")
 
 # ------------------------------------------------------------------------------
 # 5. WEERGAVE RESULTAAT & CHAT

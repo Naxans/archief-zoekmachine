@@ -8,6 +8,8 @@ Een gestroomlijnde Streamlit-toepassing die historische archiefstukken uit Googl
 3. **GitHub Repository**: Bevat de broncode (`app.py` en `requirements.txt`).
 4. **Streamlit Community Cloud**: Host de applicatie live op het web.
 5. **Google Sites**: Biedt de zoekmachine aan de eindgebruikers via een `iframe`.
+6. **Google Colab (Werkbank):** Wordt eenmalig/periodiek gebruikt om het archief te scannen en de Google Sheet (index) op te bouwen.
+7. **Google Cloud Service Account ('Archief-robot'):** Biedt de Streamlit-app een veilige 'digitale sleutel' om de privébestanden uit Google Drive en Sheets te lezen zonder dat een persoonlijk wachtwoord nodig is.
 
 ## ⚙️ Secrets (Streamlit Config)
 In de Streamlit Cloud instellingen (`Settings > Secrets`) staan de toegangssleutels:

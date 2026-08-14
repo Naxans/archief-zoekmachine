@@ -1,5 +1,7 @@
 import io
 import time
+import logging
+import warnings
 import streamlit as st
 from PIL import Image
 import gspread
@@ -7,6 +9,10 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from google import genai
 from google.genai import types
+
+# SDK meldingen onderdrukken voor schone logs
+logging.getLogger("google_genai").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore")
 
 # ------------------------------------------------------------------------------
 # 1. AUTHENTICATIE VIA STREAMLIT SECRETS
@@ -102,7 +108,6 @@ else:
 with st.form(key="onderzoek_form"):
     col1, col2 = st.columns([3, 1])
     with col1:
-        # st.text_area zorgt ervoor dat lange teksten automatisch over meerdere regels lopen
         onderzoeksvraag = st.text_area(
             "Vraag:",
             placeholder='Bijv: Geef me de bestuursleden van de firma "Radio Belge de Construction" in het jaar 1935',
@@ -158,7 +163,7 @@ if submit_button:
             2. Let goed op het BEDRIJF, PERSONEN en PERIODE/JAARTALLEN.
             3. Geef maximaal {max_bestanden} meest relevante bestandsnamen terug.
 
-            Geef UITSLAUITEND de bestandsnamen terug gescheiden door komma's. Geen extra tekst.
+            Geef UITSLUITEND de bestandsnamen terug gescheiden door komma's. Geen extra tekst.
             """
 
             try:
@@ -205,7 +210,7 @@ INSTRUCTIES VOOR JE RAPPORT:
 1. Richt je specifiek op de gevraagde firma, personen en periode.
 2. Structureer je antwoord helder.
 3. Vermeld alle concrete namen, functies, cijfers en details die op de documenten staan.
-4. Citeer steeds de bestandsnaam wanneer je naar specifieke informatie verwijst.
+4. Citeer steeds de bestandsnaam (bijv. 'document.pdf' of 'foto.jpg') wanneer je naar specifieke informatie verwijst.
 5. Trek een heldere conclusie als antwoord op de vraag.
 """
             ]
@@ -218,10 +223,25 @@ INSTRUCTIES VOOR JE RAPPORT:
                     b_mime = f['mimeType']
 
                     try:
+                        # 1. GOOGLE DOCS
                         if b_mime == 'application/vnd.google-apps.document':
                             req = drive_service.files().export_media(fileId=b_id, mimeType='text/plain')
                             doc_txt = req.execute().decode('utf-8', errors='ignore')
                             onderzoeks_payload.append(f"\n--- INHOUD GOOGLE DOC ({b_naam}) ---\n{doc_txt}")
+                        
+                        # 2. PDF BESTANDEN (NIEUW)
+                        elif b_mime == 'application/pdf' or b_naam.lower().endswith('.pdf'):
+                            req = drive_service.files().get_media(fileId=b_id)
+                            pdf_bytes = req.execute()
+
+                            pdf_part = types.Part.from_bytes(
+                                data=pdf_bytes,
+                                mime_type='application/pdf'
+                            )
+                            onderzoeks_payload.append(f"\n--- ORIGINELE PDF: {b_naam} ---")
+                            onderzoeks_payload.append(pdf_part)
+
+                        # 3. AFBEELDINGEN
                         else:
                             req = drive_service.files().get_media(fileId=b_id)
                             f_data = req.execute()

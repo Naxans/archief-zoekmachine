@@ -1,5 +1,4 @@
 import io
-import re
 import time
 import logging
 import warnings
@@ -41,18 +40,20 @@ except Exception as e:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 2. HELPER FUNCTIES VOOR PAGINA-KOPPELING EN MODEL-DETECTIE
+# 2. CONFIGURATIE & DYNAMISCHE MODEL-DETECTIE
 # ------------------------------------------------------------------------------
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
 def bepaal_werkend_model(client):
+    """Vraagt actieve modellen op bij Google en test welke daadwerkelijk werkt."""
     kandidaten = [
         'gemini-2.0-flash',
         'gemini-2.0-flash-lite',
         'gemini-1.5-flash-002',
         'gemini-1.5-pro-002'
     ]
+    
     try:
         voorradig = [m.name.replace("models/", "") for m in client.models.list()]
         for m in voorradig:
@@ -67,11 +68,13 @@ def bepaal_werkend_model(client):
             return model_naam
         except Exception:
             continue
+
     return None
 
 MODEL_NAAM = bepaal_werkend_model(ai_client)
 
 def genereer_met_retry(client, model, contents, max_retries=3):
+    """Voert een API-call uit en wacht automatisch als de TPM-limiet (429) bereikt wordt."""
     for poging in range(max_retries):
         try:
             return client.models.generate_content(model=model, contents=contents)
@@ -82,30 +85,6 @@ def genereer_met_retry(client, model, contents, max_retries=3):
                     time.sleep(12)
                     continue
             raise e
-
-def voeg_volgpaginas_toe(geselecteerde_lijst, alle_bestanden_sheet):
-    """
-    Scant de geselecteerde bestanden. Als 'blz2547' erin staat,
-    zoekt Python automatisch in de Sheet naar 'blz2548' en voegt deze toe.
-    """
-    resultaat = list(geselecteerde_lijst)
-    
-    for b_naam in geselecteerde_lijst:
-        # Zoek naar getallen in de bestandsnaam (bijv. paginanummers zoals 2547 of page1)
-        nummers = re.findall(r'\d+', b_naam)
-        if nummers:
-            laatste_num = nummers[-1]
-            volgend_num = str(int(laatste_num) + 1)
-            
-            # Vervang het nummer door het volgende nummer
-            volgende_naam_gok = b_naam.replace(laatste_num, volgend_num)
-            
-            # Controleer of dit bestand daadwerkelijk bestaat in de Google Sheet
-            for kandidaat in alle_bestanden_sheet:
-                if volgende_naam_gok.lower() in kandidaat.lower() and kandidaat not in resultaat:
-                    resultaat.append(kandidaat)
-                    
-    return resultaat
 
 # Session state variabelen
 if "actieve_chat" not in st.session_state:
@@ -126,9 +105,10 @@ st.title("🔍 Archief Zoekmachine")
 if MODEL_NAAM:
     st.caption(f"Actief AI-model: `{MODEL_NAAM}`")
 else:
-    st.error("Kon geen werkend Gemini-model vinden. Controleer je API Key.")
+    st.error("Kon geen werkend Gemini-model vinden voor deze API-sleutel. Controleer je Gemini API key.")
     st.stop()
 
+# Invoer van de onderzoeksvraag & parameters
 col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
@@ -139,15 +119,17 @@ with col1:
 with col2:
     max_bestanden = st.slider("Max bronnen:", min_value=5, max_value=50, value=15, step=5)
 
+# Knoppenbalk met Actie- en Stop-knoppen
 btn_col1, btn_col2 = st.columns([2, 1])
 with btn_col1:
     submit_button = st.button("🔍 Voer onderzoek uit", type="primary", use_container_width=True)
 with btn_col2:
     stop_button = st.button("⛔ Stop / Annuleer", type="secondary", use_container_width=True)
 
+# Directe stop-afhandeling
 if stop_button:
     st.session_state.gestopt = True
-    st.warning("⚠️ Onderzoek geannuleerd.")
+    st.warning("⚠️ Onderzoek is direct geannuleerd.")
     st.stop()
 
 # ------------------------------------------------------------------------------
@@ -167,6 +149,8 @@ if submit_button:
                 sh = gc.open(SHEET_NAAM)
                 worksheet = sh.sheet1
                 alle_records = worksheet.get_all_records()
+                
+                # Filter lege rijen uit
                 data = [row for row in alle_records if str(row.get('Bestandsnaam', '')).strip()]
             except Exception as e:
                 st.error(f"Kon de Google Sheet niet openen: {e}")
@@ -176,74 +160,78 @@ if submit_button:
                 st.error("De Google Sheet bevat geen geldige gegevens.")
                 st.stop()
 
-            alle_sheet_bestanden = [str(r.get('Bestandsnaam', '')).strip() for r in data]
-
-            index_regels = []
-            for row in data:
-                b_naam_val = row.get('Bestandsnaam') or row.get('Bestandsnaam (ID)') or ''
-                regel = f"Bestandsnaam: {b_naam_val} | Datum: {row.get('Datum Document')} | Personen: {row.get('Genoemde Personen')} | Onderwerp: {row.get('Onderwerp (NL)')}"
-                index_regels.append(regel)
-
-            index_tekst = "\n".join(index_regels)
-            if len(index_tekst) > 250000:
-                index_tekst = index_tekst[:250000]
-
-            # Ruime filter-prompt zodat Gemini NIET te streng bestanden wegfiltert
-            filter_prompt = f"""
-            Hier is de inhoudsopgave van ons archief:
-
-            {index_tekst}
-
-            ZOEKOPDRACHT: "{onderzoeksvraag}"
-
-            OPDRACHT:
-            1. Geef ALLE bestandsnamen terug die te maken hebben met de firma, personen, onderwerpen of jaartallen uit de zoekopdracht.
-            2. Bij twijfel: SLUIT HET BESTAND IN. Wees niet te streng, beter 1 bestand te veel dan te weinig.
-            3. Selecteer maximaal {max_bestanden} bestandsnamen.
-
-            Geef ENKEL de exacte bestandsnamen terug, gescheiden door komma's. Geeft geen andere tekst.
-            """
-
-            try:
-                res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
-                geselecteerde_bestanden = [b.strip() for b in res_filter.text.split(',') if b.strip()]
-            except Exception as e:
-                st.error(f"Fout tijdens het scannen van de index: {e}")
+            # Controle op tussentijdse stop
+            if st.session_state.gestopt:
                 st.stop()
 
-            # Automatische verrijking: Python zoekt direct naar vervolgpagina's
-            geselecteerde_bestanden = voeg_volgpaginas_toe(geselecteerde_bestanden, alle_sheet_bestanden)
+            # Directe bestandsnaam check
+            geselecteerde_bestanden = []
+            for row in data:
+                b_naam_sheet = str(row.get('Bestandsnaam', '')).strip()
+                if b_naam_sheet and b_naam_sheet.lower() in onderzoeksvraag.lower():
+                    geselecteerde_bestanden.append(b_naam_sheet)
+
+            # Zoek via Gemini als er geen directe naam match is
+            if not geselecteerde_bestanden:
+                index_regels = []
+                for row in data:
+                    b_naam_val = row.get('Bestandsnaam') or row.get('Bestandsnaam (ID)') or ''
+                    regel = f"Bestandsnaam: {b_naam_val} | Datum: {row.get('Datum Document')} | Personen: {row.get('Genoemde Personen')} | Onderwerp: {row.get('Onderwerp (NL)')}"
+                    index_regels.append(regel)
+
+                index_tekst = "\n".join(index_regels)
+                
+                if len(index_tekst) > 250000:
+                    index_tekst = index_tekst[:250000]
+
+                filter_prompt = f"""
+                Jij bent hoofdarchivaris. Hieronder staat de volledige inhoudsopgave van ons archief:
+
+                {index_tekst}
+
+                ONDERZOEKSVRAAG: "{onderzoeksvraag}"
+
+                INSTRUCTIES:
+                1. Welke bestanden/foto's uit de index zijn het meest relevant voor deze specifieke vraag?
+                2. Let goed op het BEDRIJF, PERSONEN, ONDERWERP en PERIODE/JAARTALLEN.
+                3. Geef maximaal {max_bestanden} meest relevante bestandsnamen terug.
+
+                Geef UITSLUITEND de exacte bestandsnamen terug gescheiden door komma's. Geen extra tekst of labels zoals 'B:'.
+                """
+
+                try:
+                    res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
+                    geselecteerde_bestanden = [b.strip() for b in res_filter.text.split(',') if b.strip()]
+                except Exception as e:
+                    st.error(f"Fout tijdens het scannen van de index ({MODEL_NAAM}): {e}")
+                    if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                        st.info("💡 De API is momenteel druk bezet. Wacht circa 30 seconden en probeer het nogmaals.")
+                    st.stop()
 
         if not geselecteerde_bestanden:
-            st.warning("Geen relevante bestanden gevonden.")
+            st.warning("Geen relevante bestanden gevonden op basis van de zoekopdracht.")
             st.stop()
 
-        # STAP 2: Documenten ophalen uit Drive
-        with st.spinner(f"Stap 2/3: {len(geselecteerde_bestanden)} document(en) ophalen uit Google Drive..."):
+        # STAP 2: Originele documenten ophalen uit Google Drive
+        with st.spinner("Stap 2/3: Originele documenten ophalen uit Google Drive..."):
             onderzoeks_payload = [
-                f"""Jij bent een financieel-historisch expert en hoofdarchivaris.
-Beantwoord de onderzoeksvraag uitsluitend en uiterst nauwkeurig op basis van de meegeleverde documenten.
+                f"""Jij bent een financieel-historisch expert en archivaris.
+Beantwoord onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de meegeleverde originele archiefstukken.
 
 ONDERZOEKSVRAAG: {onderzoeksvraag}
 
-INSTRUCTIES OM FOUTEN EN VERWARRING TE VOORKOMEN:
-
-1. KRITISCH LEZEN VAN STUKKEN / STAATSBLADEN:
-   - Op één pagina staan vaak meerdere publicaties van VERSCHILLENDE bedrijven.
-   - Wijs bestuursleden/functies ALLEEN toe aan de gezochte firma als de naam ONDER het kopje/titel van die specifieke firma staat!
-   - Neem GEEN namen over die onder een ander bedrijf op dezelfde pagina staan.
-
-2. MULTI-PAGINA DOCUMENTEN:
-   - Lees vervolgpagina's goed door. Als de akte van de gezochte firma doorloopt op een volgende pagina, horen de namen op die vervolgpagina bij deze firma.
-
-3. RAPPORTAGE:
-   - Noem per gevonden persoon de exacte functie en de geciteerde bestandsnaam (bijv. 'staatsblad1935-blz2.jpg').
-   - Als er sprake is van een bestuurswijziging in de loop der tijd, vermeld dit dan chronologisch.
+INSTRUCTIES VOOR JE RAPPORT:
+1. Richt je specifiek op de gevraagde firma, personen en periode.
+2. Structureer je antwoord helder.
+3. Vermeld alle concrete namen, functies, cijfers en details die op de documenten staan.
+4. Citeer steeds de bestandsnaam (bijv. 'document.pdf' of 'foto.jpg') wanneer je naar specifieke informatie verwijst.
+5. Trek een heldere conclusie als antwoord op de vraag.
 """
             ]
 
             geladen_aantal = 0
             for b_naam in geselecteerde_bestanden:
+                # Interruptiecontrole binnen de ophaallus
                 if st.session_state.gestopt:
                     st.warning("Onderzoek geannuleerd bij het ophalen van bestanden.")
                     st.stop()
@@ -283,17 +271,24 @@ INSTRUCTIES OM FOUTEN EN VERWARRING TE VOORKOMEN:
                         elif b_mime == 'application/pdf' or b_real_naam.lower().endswith('.pdf'):
                             req = drive_service.files().get_media(fileId=b_id)
                             pdf_bytes = req.execute()
-                            pdf_part = types.Part.from_bytes(data=pdf_bytes, mime_type='application/pdf')
+
+                            pdf_part = types.Part.from_bytes(
+                                data=pdf_bytes,
+                                mime_type='application/pdf'
+                            )
                             onderzoeks_payload.append(f"\n--- ORIGINELE PDF: {b_real_naam} ---")
                             onderzoeks_payload.append(pdf_part)
 
                         else:
                             req = drive_service.files().get_media(fileId=b_id)
                             f_data = req.execute()
+
                             img = Image.open(io.BytesIO(f_data))
                             if img.mode != 'RGB':
                                 img = img.convert('RGB')
+                            
                             img.thumbnail((800, 800))
+
                             img_byte_arr = io.BytesIO()
                             img.save(img_byte_arr, format='JPEG', quality=70)
 
@@ -307,15 +302,17 @@ INSTRUCTIES OM FOUTEN EN VERWARRING TE VOORKOMEN:
                         geladen_aantal += 1
                     except Exception as e:
                         st.warning(f"Kon {b_real_naam} niet laden: {e}")
+                else:
+                    st.warning(f"Bestand '{b_naam_schoon}' niet gevonden in Google Drive.")
 
         if geladen_aantal == 0:
-            st.error("Geen van de documenten kon uit Google Drive worden opgehaald.")
+            st.error("De geselecteerde bestanden konden niet worden teruggevonden in Google Drive.")
             st.stop()
 
-        # STAP 3: AI-analyse
-        with st.spinner("Stap 3/3: Dokumenten analyseren met Gemini..."):
+        # STAP 3: Analyse uitvoeren via Gemini
+        with st.spinner("Stap 3/3: Analyse uitvoeren via Gemini..."):
             if st.session_state.gestopt:
-                st.warning("Onderzoek geannuleerd.")
+                st.warning("Onderzoek geannuleerd voor de AI-analyse.")
                 st.stop()
 
             try:
@@ -324,17 +321,19 @@ INSTRUCTIES OM FOUTEN EN VERWARRING TE VOORKOMEN:
                 st.session_state.chat_historie.append(("assistant", analyse_response.text))
             except Exception as e:
                 st.error(f"Fout tijdens Gemini analyse: {e}")
+                st.info("💡 Tip: Probeer 'Max bronnen' te verlagen naar bijv. 5 bronnen om binnen de limieten te blijven.")
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE BRONNEN & RESULTATEN
+# 5. WEERGAVE BRONNEN MET PREVIEWS & RAPPORT
 # ------------------------------------------------------------------------------
 if st.session_state.bron_details:
-    st.subheader(f"📁 Geanalyseerde bronnen ({len(st.session_state.bron_details)}):")
+    st.subheader("📁 Geselecteerde bronnen & Afbeeldingen:")
     
     cols = st.columns(3)
     for index, bron in enumerate(st.session_state.bron_details):
         b_naam = bron["naam"]
         b_id = bron["id"]
+        
         thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w800"
         drive_view_url = f"https://drive.google.com/file/d/{b_id}/view"
 
@@ -351,6 +350,7 @@ if st.session_state.chat_historie:
         with st.chat_message(rol):
             st.write(tekst)
 
+    # Vervolgvragen stellen
     if vervolgvraag := st.chat_input("Stel een vervolgvraag over dit rapport..."):
         st.session_state.chat_historie.append(("user", vervolgvraag))
         with st.chat_message("user"):

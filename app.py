@@ -86,13 +86,15 @@ def genereer_met_retry(client, model, contents, max_retries=3):
                     continue
             raise e
 
-# Session state voor chatsessie & bronnen
+# Session state variabelen
 if "actieve_chat" not in st.session_state:
     st.session_state.actieve_chat = None
 if "chat_historie" not in st.session_state:
     st.session_state.chat_historie = []
 if "bron_details" not in st.session_state:
     st.session_state.bron_details = []
+if "gestopt" not in st.session_state:
+    st.session_state.gestopt = False
 
 # ------------------------------------------------------------------------------
 # 3. STREAMLIT INTERFACE
@@ -106,19 +108,29 @@ else:
     st.error("Kon geen werkend Gemini-model vinden voor deze API-sleutel. Controleer je Gemini API key.")
     st.stop()
 
-# Invoerformulier
-with st.form(key="onderzoek_form"):
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        onderzoeksvraag = st.text_area(
-            "Vraag:",
-            placeholder='Bijv: Geef me de bestuursleden van de firma "Radio Belge de Construction" in het jaar 1935',
-            height=100
-        )
-    with col2:
-        max_bestanden = st.slider("Max bronnen:", min_value=5, max_value=50, value=15, step=5)
-    
-    submit_button = st.form_submit_button(label="Voer onderzoek uit", type="primary")
+# Invoer van de onderzoeksvraag & parameters
+col1, col2 = st.columns([3, 1])
+with col1:
+    onderzoeksvraag = st.text_area(
+        "Vraag:",
+        placeholder='Bijv: Geef me de bestuursleden van de firma "Radio Belge de Construction" in het jaar 1935',
+        height=100
+    )
+with col2:
+    max_bestanden = st.slider("Max bronnen:", min_value=5, max_value=50, value=15, step=5)
+
+# Knoppenbalk met Actie- en Stop-knoppen
+btn_col1, btn_col2 = st.columns([2, 1])
+with btn_col1:
+    submit_button = st.button("🔍 Voer onderzoek uit", type="primary", use_container_width=True)
+with btn_col2:
+    stop_button = st.button("⛔ Stop / Annuleer", type="secondary", use_container_width=True)
+
+# Directe stop-afhandeling
+if stop_button:
+    st.session_state.gestopt = True
+    st.warning("⚠️ Onderzoek is direct geannuleerd.")
+    st.stop()
 
 # ------------------------------------------------------------------------------
 # 4. ONDERZOEKSLOGICA
@@ -127,17 +139,18 @@ if submit_button:
     if not onderzoeksvraag.strip():
         st.warning("Voer a.u.b. een onderzoeksvraag in.")
     else:
+        st.session_state.gestopt = False
         st.session_state.chat_historie = []
         st.session_state.bron_details = []
         
-        # STAP 1: Inhoudsopgave scannen (Alleen gevulde rijen)
+        # STAP 1: Inhoudsopgave scannen
         with st.spinner("Stap 1/3: Inhoudsopgave (Google Sheet) scannen..."):
             try:
                 sh = gc.open(SHEET_NAAM)
                 worksheet = sh.sheet1
                 alle_records = worksheet.get_all_records()
                 
-                # OPTIE 2: Filter direct alle rijen uit zonder bestandsnaam
+                # Filter lege rijen uit
                 data = [row for row in alle_records if str(row.get('Bestandsnaam', '')).strip()]
             except Exception as e:
                 st.error(f"Kon de Google Sheet niet openen: {e}")
@@ -147,14 +160,18 @@ if submit_button:
                 st.error("De Google Sheet bevat geen geldige gegevens.")
                 st.stop()
 
-            # Snelle check: Is er direct naar een specifieke bestandsnaam gevraagd?
+            # Controle op tussentijdse stop
+            if st.session_state.gestopt:
+                st.stop()
+
+            # Directe bestandsnaam check
             geselecteerde_bestanden = []
             for row in data:
                 b_naam_sheet = str(row.get('Bestandsnaam', '')).strip()
                 if b_naam_sheet and b_naam_sheet.lower() in onderzoeksvraag.lower():
                     geselecteerde_bestanden.append(b_naam_sheet)
 
-            # Als er geen directe bestandsnaam in de vraag stond, doorzoek via Gemini
+            # Zoek via Gemini als er geen directe naam match is
             if not geselecteerde_bestanden:
                 index_regels = []
                 for row in data:
@@ -164,7 +181,6 @@ if submit_button:
 
                 index_tekst = "\n".join(index_regels)
                 
-                # Ruime limiet op te versturen tekst
                 if len(index_tekst) > 250000:
                     index_tekst = index_tekst[:250000]
 
@@ -215,17 +231,19 @@ INSTRUCTIES VOOR JE RAPPORT:
 
             geladen_aantal = 0
             for b_naam in geselecteerde_bestanden:
-                # Schoon de bestandsnaam op van aanhalingstekens of B: / Bestandsnaam: prefixes
+                # Interruptiecontrole binnen de ophaallus
+                if st.session_state.gestopt:
+                    st.warning("Onderzoek geannuleerd bij het ophalen van bestanden.")
+                    st.stop()
+
                 b_naam_schoon = b_naam.strip("'\" ")
                 if ":" in b_naam_schoon:
                     b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
                 
-                # 1. Direct in Google Drive zoeken op exacte bestandsnaam
                 query = f"name = '{b_naam_schoon}' and trashed = false"
                 res = drive_service.files().list(q=query, fields='files(id, name, mimeType)').execute()
                 bestanden = res.get('files', [])
 
-                # 2. Als exact niet werkt: flexibele fallback zoekopdracht
                 if not bestanden:
                     schoon_zonder_ext = b_naam_schoon.replace('.jpg', '').replace('.JPG', '').replace('.jpeg', '').replace('.png', '').replace('.pdf', '')
                     query_flexibel = f"name contains '{schoon_zonder_ext}' and trashed = false"
@@ -238,7 +256,6 @@ INSTRUCTIES VOOR JE RAPPORT:
                     b_mime = f['mimeType']
                     b_real_naam = f['name']
 
-                    # Opslaan voor visuele weergave
                     st.session_state.bron_details.append({
                         "naam": b_real_naam,
                         "id": b_id,
@@ -246,13 +263,11 @@ INSTRUCTIES VOOR JE RAPPORT:
                     })
 
                     try:
-                        # Google Docs
                         if b_mime == 'application/vnd.google-apps.document':
                             req = drive_service.files().export_media(fileId=b_id, mimeType='text/plain')
                             doc_txt = req.execute().decode('utf-8', errors='ignore')
                             onderzoeks_payload.append(f"\n--- INHOUD GOOGLE DOC ({b_real_naam}) ---\n{doc_txt}")
                         
-                        # PDF Bestanden
                         elif b_mime == 'application/pdf' or b_real_naam.lower().endswith('.pdf'):
                             req = drive_service.files().get_media(fileId=b_id)
                             pdf_bytes = req.execute()
@@ -264,7 +279,6 @@ INSTRUCTIES VOOR JE RAPPORT:
                             onderzoeks_payload.append(f"\n--- ORIGINELE PDF: {b_real_naam} ---")
                             onderzoeks_payload.append(pdf_part)
 
-                        # Afbeeldingen / Foto's
                         else:
                             req = drive_service.files().get_media(fileId=b_id)
                             f_data = req.execute()
@@ -297,6 +311,10 @@ INSTRUCTIES VOOR JE RAPPORT:
 
         # STAP 3: Analyse uitvoeren via Gemini
         with st.spinner("Stap 3/3: Analyse uitvoeren via Gemini..."):
+            if st.session_state.gestopt:
+                st.warning("Onderzoek geannuleerd voor de AI-analyse.")
+                st.stop()
+
             try:
                 st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
                 analyse_response = st.session_state.actieve_chat.send_message(onderzoeks_payload)
@@ -311,7 +329,6 @@ INSTRUCTIES VOOR JE RAPPORT:
 if st.session_state.bron_details:
     st.subheader("📁 Geselecteerde bronnen & Afbeeldingen:")
     
-    # Weergave in een net raster van 3 kolommen
     cols = st.columns(3)
     for index, bron in enumerate(st.session_state.bron_details):
         b_naam = bron["naam"]

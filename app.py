@@ -191,14 +191,14 @@ if submit_button:
 
                 ONDERZOEKSVRAAG: "{onderzoeksvraag}"
 
-                INSTRUCTIES:
-                1. Welke bestanden/foto's uit de index zijn het meest relevant voor deze specifieke vraag?
-                2. Let goed op het BEDRIJF, PERSONEN, ONDERWERP en PERIODE/JAARTALLEN.
-                3. BELANGRIJK BIJ MULTI-PAGINA DOCUMENTEN EN STAATSBLADEN:
-                   Als een relevant document of staatsblad uit meerdere bladzijden bestaat (bijv. blz. 1, blz. 2, pag 1, pag 2) of als een melding/akte doorloopt, selecteer dan VERPLICHT OOK de direct opvolgende pagina('s) van datzelfde document of jaartal, zelfs als de bedrijfsnaam op de vervolgpagina niet expliciet herhaald wordt!
-                4. Geef maximaal {max_bestanden} meest relevante bestandsnamen terug.
+                STRIKTE SELECTIE-INSTRUCTIES:
+                1. Zoek naar documenten die de gevraagde firma, personen of onderwerpen bevatten.
+                2. VERPLICHTE MULTI-PAGINA REGEL:
+                   Akten en meldingen in staatsbladen of archieven lopen zeer vaak door op de VOLGENDE pagina.
+                   Als je een bestand selecteert (bijv. 'staatsblad1936-03-28blz2547.jpg' of 'doc_deel1.jpg'), MOET JE OOK DIRECT de opvolgende pagina('s) selecteren ('staatsblad1936-03-28blz2548.jpg' of 'doc_deel2.jpg'), ZELFS als de bedrijfsnaam niet expliciet op die vervolgpagina vermeld staat in de index!
+                3. Geef maximaal {max_bestanden} bestandsnamen terug.
 
-                Geef UITSLUITEND de exacte bestandsnamen terug gescheiden door komma's. Geen extra tekst of labels zoals 'B:'.
+                Geef UITSLUITEND de exacte bestandsnamen terug gescheiden door komma's. Geen extra tekst.
                 """
 
                 try:
@@ -222,20 +222,24 @@ Beantwoord onderstaande onderzoeksvraag grondig en nauwkeurig op basis van de me
 
 ONDERZOEKSVRAAG: {onderzoeksvraag}
 
-CRUCIALE INSTRUCTIES VOOR STRUCTUUR EN CONCLUSIE:
-1. RESPECTEER STRIKT DE CHRONOLOGIE EN WIJZIGINGEN:
-   - Voeg NIET zomaar namen uit verschillende documenten of jaartallen samen tot één enkele statische lijst.
-   - Als document A (bijv. begin 1936) andere bestuursleden/voorzitters noemt dan document B (bijv. eind 1936 of 1937), meld dan expliciet dat er een BESTUURSWIJZIGING, OPVOLGING of WISSEL heeft plaatsgevonden.
+CRUCIALE INSTRUCTIES VOOR HERKENNING EN SCHEIDING VAN FIRMA'S:
 
-2. IN HET EINDRAPPORT EN DE CONCLUSIE:
-   - Presenteer een CHRONOLOGISCH OVERZICHT in plaats van een gemengde/samengevoegde lijst.
-   - Bv: "Oorspronkelijk bestuur volgens bron A (datum X): Voorzitter A..." gevolgd door "Bestuurswijziging volgens bron B (datum Y): Nieuwe voorzitter B t.o.v. A...".
-   - Zet NOOIT twee verschillende personen op precies dezelfde functie (zoals voorzitter) in hetzelfde overzicht zonder uit te leggen wie wie opvolgde en volgens welk document.
+1. STRIKTE SCHEIDING VAN BEDRIJVEN OP DEZELFDE PAGINA:
+   - Op krantenpagina's en staatsbladen staan vaak MEERDERE bedrijven onder elkaar.
+   - Lees de pagina strikt van boven naar beneden, blok voor blok.
+   - Wijs personen, bestuurders en functies UITSLUITEND toe aan het specifieke bedrijf waar ze RECHTSTREEKS onder staan gedrukt.
+   - Koppel NOOIT een naam aan de gezochte firma als die naam eigenlijk onder de kop/titel van een ANDERE firma staat op dezelfde bladzijde!
 
-3. EXPLICITEER PER ARCHIEFSTUK EN GEBRUIK EXACTE CITATEN:
-   - Controleer ALLE documenten en pagina's van boven naar beneden.
-   - Wijs ALLEEN bestuursleden of functies toe aan een firma waaronder ze daadwerkelijk vermeld staan.
-   - Vermeld per gevonden persoon de exacte functie en de geciteerde bestandsnaam (bijv. 'staatsblad1936-03-28blz2548.jpg').
+2. CONTROLEER PAGINA-OVEREENKOMSTEN EN LEES DOOR:
+   - Controleer bij multi-pagina documenten of een tekst onderaan de eerste pagina doorloopt bovenaan de volgende pagina.
+   - Als de gezochte firma onderaan pagina 1 begint en de namen van de bestuurders pas bovenaan pagina 2 staan, horen die namen bij de gezochte firma.
+
+3. RESPECTEER CHRONOLOGIE EN MUTATIES:
+   - Voeg namen uit verschillende jaartallen/documenten niet samen tot één statische lijst.
+   - Als de samenstelling wijzigt (bijv. in 1936 vs 1937), meld dan expliciet dat er een bestuurswijziging/opvolging heeft plaatsgevonden.
+
+4. CITEER EXACT EN VERMELD BRONNEN:
+   - Vermeld bij elke vaststelling de exacte bestandsnaam waarin dit staat (bijv. 'staatsblad1936-03-28blz2548.jpg').
 """
             ]
 

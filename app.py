@@ -86,11 +86,13 @@ def genereer_met_retry(client, model, contents, max_retries=3):
                     continue
             raise e
 
-# Session state voor chatsessie
+# Session state voor chatsessie & bronnen
 if "actieve_chat" not in st.session_state:
     st.session_state.actieve_chat = None
 if "chat_historie" not in st.session_state:
     st.session_state.chat_historie = []
+if "bron_details" not in st.session_state:
+    st.session_state.bron_details = []
 
 # ------------------------------------------------------------------------------
 # 3. STREAMLIT INTERFACE
@@ -126,6 +128,7 @@ if submit_button:
         st.warning("Voer a.u.b. een onderzoeksvraag in.")
     else:
         st.session_state.chat_historie = []
+        st.session_state.bron_details = []
         
         # STAP 1: Inhoudsopgave scannen
         with st.spinner("Stap 1/3: Inhoudsopgave (Google Sheet) scannen..."):
@@ -175,10 +178,6 @@ if submit_button:
                     st.info("💡 De API is momenteel druk bezet. Wacht circa 30 seconden en probeer het nogmaals.")
                 st.stop()
 
-        st.subheader("Geselecteerde bronnen:")
-        for b in geselecteerde_bestanden:
-            st.markdown(f"- `{b}`")
-
         if not geselecteerde_bestanden:
             st.warning("Geen relevante bestanden gevonden op basis van de zoekopdracht.")
             st.stop()
@@ -222,6 +221,13 @@ INSTRUCTIES VOOR JE RAPPORT:
                     b_id = f['id']
                     b_mime = f['mimeType']
 
+                    # Opslaan voor visuele weergave in de interface
+                    st.session_state.bron_details.append({
+                        "naam": b_naam,
+                        "id": b_id,
+                        "mime": b_mime
+                    })
+
                     try:
                         # 1. GOOGLE DOCS
                         if b_mime == 'application/vnd.google-apps.document':
@@ -229,7 +235,7 @@ INSTRUCTIES VOOR JE RAPPORT:
                             doc_txt = req.execute().decode('utf-8', errors='ignore')
                             onderzoeks_payload.append(f"\n--- INHOUD GOOGLE DOC ({b_naam}) ---\n{doc_txt}")
                         
-                        # 2. PDF BESTANDEN (NIEUW)
+                        # 2. PDF BESTANDEN
                         elif b_mime == 'application/pdf' or b_naam.lower().endswith('.pdf'):
                             req = drive_service.files().get_media(fileId=b_id)
                             pdf_bytes = req.execute()
@@ -241,7 +247,7 @@ INSTRUCTIES VOOR JE RAPPORT:
                             onderzoeks_payload.append(f"\n--- ORIGINELE PDF: {b_naam} ---")
                             onderzoeks_payload.append(pdf_part)
 
-                        # 3. AFBEELDINGEN
+                        # 3. AFBEELDINGEN / FOTO'S
                         else:
                             req = drive_service.files().get_media(fileId=b_id)
                             f_data = req.execute()
@@ -281,8 +287,27 @@ INSTRUCTIES VOOR JE RAPPORT:
                 st.info("💡 Tip: Probeer 'Max bronnen' te verlagen naar bijv. 5 bronnen om binnen de limieten te blijven.")
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE RESULTAAT & CHAT
+# 5. WEERGAVE BRONNEN MET PREVIEWS & RAPPORT
 # ------------------------------------------------------------------------------
+if st.session_state.bron_details:
+    st.subheader("📁 Geselecteerde bronnen & Afbeeldingen:")
+    
+    # Weergave in raster/kolommen voor mooie presentatie
+    cols = st.columns(3)
+    for index, bron in enumerate(st.session_state.bron_details):
+        b_naam = bron["naam"]
+        b_id = bron["id"]
+        
+        # Genereren van directe Google Drive links
+        thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w800"
+        drive_view_url = f"https://drive.google.com/file/d/{b_id}/view"
+
+        with cols[index % 3]:
+            with st.expander(f"📄 {b_naam}", expanded=True):
+                # Toon de preview-afbeelding (werkt voor PDF's, foto's en gescande documenten)
+                st.image(thumbnail_url, caption=b_naam, use_container_width=True)
+                st.link_button("🔍 Open in hoge resolutie", drive_view_url)
+
 if st.session_state.chat_historie:
     st.divider()
     st.subheader("📑 Historisch Onderzoeksrapport")

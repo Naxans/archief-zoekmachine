@@ -1,4 +1,5 @@
 import io
+import re
 import time
 import logging
 import warnings
@@ -40,7 +41,7 @@ except Exception as e:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 2. CONFIGURATIE & DYNAMISCHE MODEL-DETECTIE
+# 2. HELPER FUNCTIES (MODEL DETECTIE & DYNAMISCHE PAGINA-KOPPELING)
 # ------------------------------------------------------------------------------
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
@@ -85,6 +86,24 @@ def genereer_met_retry(client, model, contents, max_retries=3):
                     time.sleep(12)
                     continue
             raise e
+
+def voeg_vervolgpaginas_toe(geselecteerde_bestanden, alle_sheet_bestanden):
+    """
+    Koppelt automatisch de direct opvolgende pagina (rij N+1) uit de Google Sheet.
+    Dit zorgt ervoor dat doorgelopen akten in staatsbladen/kranten nooit worden afgesneden.
+    """
+    resultaat = list(geselecteerde_bestanden)
+    
+    for b_naam in geselecteerde_bestanden:
+        if b_naam in alle_sheet_bestanden:
+            idx = alle_sheet_bestanden.index(b_naam)
+            # Voeg de direct volgende pagina toe als die bestaat
+            if idx + 1 < len(alle_sheet_bestanden):
+                volgende_pagina = alle_sheet_bestanden[idx + 1]
+                if volgende_pagina not in resultaat:
+                    resultaat.append(volgende_pagina)
+                    
+    return resultaat
 
 # Session state variabelen
 if "actieve_chat" not in st.session_state:
@@ -160,14 +179,15 @@ if submit_button:
                 st.error("De Google Sheet bevat geen geldige gegevens.")
                 st.stop()
 
-            # Controle op tussentijdse stop
             if st.session_state.gestopt:
                 st.stop()
 
+            # Bewaar de exacte volgorde van bestandsnamen in de Google Sheet
+            alle_sheet_bestanden = [str(row.get('Bestandsnaam', '')).strip() for row in data]
+
             # Directe bestandsnaam check
             geselecteerde_bestanden = []
-            for row in data:
-                b_naam_sheet = str(row.get('Bestandsnaam', '')).strip()
+            for b_naam_sheet in alle_sheet_bestanden:
                 if b_naam_sheet and b_naam_sheet.lower() in onderzoeksvraag.lower():
                     geselecteerde_bestanden.append(b_naam_sheet)
 
@@ -192,11 +212,11 @@ if submit_button:
                 ONDERZOEKSVRAAG: "{onderzoeksvraag}"
 
                 INSTRUCTIES:
-                1. Welke bestanden/foto's uit de index zijn het meest relevant voor deze specifieke vraag?
-                2. Let goed op het BEDRIJF, PERSONEN, ONDERWERP en PERIODE/JAARTALLEN.
+                1. Selecteer ALLE bestanden uit de index die te maken hebben met het bedrijf, de personen of het jaar uit de vraag.
+                2. Beter 1 bestand te veel geselecteerd dan 1 te weinig.
                 3. Geef maximaal {max_bestanden} meest relevante bestandsnamen terug.
 
-                Geef UITSLUITEND de exacte bestandsnamen terug gescheiden door komma's. Geen extra tekst of labels zoals 'B:'.
+                Geef UITSLUITEND de exacte bestandsnamen terug gescheiden door komma's. Geen extra tekst.
                 """
 
                 try:
@@ -204,34 +224,41 @@ if submit_button:
                     geselecteerde_bestanden = [b.strip() for b in res_filter.text.split(',') if b.strip()]
                 except Exception as e:
                     st.error(f"Fout tijdens het scannen van de index ({MODEL_NAAM}): {e}")
-                    if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                        st.info("💡 De API is momenteel druk bezet. Wacht circa 30 seconden en probeer het nogmaals.")
                     st.stop()
+
+            # AUTOMATISCHE KOPPELING: Voeg voor elke geselecteerde pagina direct de VOLGENDE pagina toe
+            geselecteerde_bestanden = voeg_vervolgpaginas_toe(geselecteerde_bestanden, alle_sheet_bestanden)
 
         if not geselecteerde_bestanden:
             st.warning("Geen relevante bestanden gevonden op basis van de zoekopdracht.")
             st.stop()
 
         # STAP 2: Originele documenten ophalen uit Google Drive
-        with st.spinner("Stap 2/3: Originele documenten ophalen uit Google Drive..."):
+        with st.spinner(f"Stap 2/3: Originele documenten ({len(geselecteerde_bestanden)} stuks) ophalen uit Drive..."):
             onderzoeks_payload = [
                 f"""Jij bent een financieel-historisch expert en archivaris.
-Beantwoord onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de meegeleverde originele archiefstukken.
+Beantwoord de onderzoeksvraag uiterst nauwkeurig op basis van de meegeleverde documenten en/of afbeeldingen.
 
 ONDERZOEKSVRAAG: {onderzoeksvraag}
 
-INSTRUCTIES VOOR JE RAPPORT:
-1. Richt je specifiek op de gevraagde firma, personen en periode.
-2. Structureer je antwoord helder.
-3. Vermeld alle concrete namen, functies, cijfers en details die op de documenten staan.
-4. Citeer steeds de bestandsnaam (bijv. 'document.pdf' of 'foto.jpg') wanneer je naar specifieke informatie verwijst.
-5. Trek een heldere conclusie als antwoord op de vraag.
+CRUCIALE INSTRUCTIES VOOR HERKENNING EN VERVOLGPAGINA'S:
+1. DOORGELOPEN AKTEN / VERVOLGPAGINA'S:
+   - De meegeleverde bestanden staan in chronologische/volgordelijke reeksen.
+   - Een akte van een bedrijf (zoals "Radio Belge de Construction") begint vaak onderaan pagina 1 en loopt bovenaan pagina 2 door.
+   - Lees vervolgpagina's direct in samenhang met de voorafgaande pagina. De namen bovenaan pagina 2 horen bij het bedrijf dat onderaan pagina 1 werd aangekondigd!
+
+2. STRIKTE TOEWIJZING VAN PERSONEN:
+   - Wijs personen/bestuursleden ALLEEN toe aan de gezochte firma als de tekst dit expliciet bevestigt.
+   - Voorkom verwarring met andere bedrijven die toevallig op dezelfde bladzijde staan afgedrukt.
+
+3. RAPPORTAGE:
+   - Geef een helder, chronologisch overzicht van alle vastgestelde bestuursleden en hun functies.
+   - Vermeld steeds de exacte bestandsnaam (bijv. 'staatsblad1935_blz2548.jpg') waarin elke specifieke naam/functie is teruggevonden.
 """
             ]
 
             geladen_aantal = 0
             for b_naam in geselecteerde_bestanden:
-                # Interruptiecontrole binnen de ophaallus
                 if st.session_state.gestopt:
                     st.warning("Onderzoek geannuleerd bij het ophalen van bestanden.")
                     st.stop()

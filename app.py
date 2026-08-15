@@ -144,45 +144,56 @@ if submit_button:
                 st.error("De Google Sheet bevat nog geen data of is leeg.")
                 st.stop()
 
-            index_regels = []
+            # Snelle check: Is er direct naar een specifieke bestandsnaam gevraagd?
+            geselecteerde_bestanden = []
             for row in data:
-                regel = f"B:{row.get('Bestandsnaam')} | D:{row.get('Datum Document')} | P:{row.get('Genoemde Personen')} | O:{row.get('Onderwerp (NL)')}"
-                index_regels.append(regel)
+                b_naam_sheet = str(row.get('Bestandsnaam', '')).strip()
+                if b_naam_sheet and b_naam_sheet.lower() in onderzoeksvraag.lower():
+                    geselecteerde_bestanden.append(b_naam_sheet)
 
-            index_tekst = "\n".join(index_regels)
-            
-            if len(index_tekst) > 40000:
-                index_tekst = index_tekst[:40000]
+            # Als er geen directe bestandsnaam in de vraag stond, vraag Gemini om de Sheet te doorzoeken
+            if not geselecteerde_bestanden:
+                index_regels = []
+                for row in data:
+                    b_naam_val = row.get('Bestandsnaam') or row.get('Bestandsnaam (ID)') or ''
+                    regel = f"Bestandsnaam: {b_naam_val} | Datum: {row.get('Datum Document')} | Personen: {row.get('Genoemde Personen')} | Onderwerp: {row.get('Onderwerp (NL)')}"
+                    index_regels.append(regel)
 
-            filter_prompt = f"""
-            Jij bent hoofdarchivaris. Hieronder staat de inhoudsopgave van ons archief:
+                index_tekst = "\n".join(index_regels)
+                
+                # Ruime limiet zodat alle 1.000+ rijen meegaan
+                if len(index_tekst) > 250000:
+                    index_tekst = index_tekst[:250000]
 
-            {index_tekst}
+                filter_prompt = f"""
+                Jij bent hoofdarchivaris. Hieronder staat de volledige inhoudsopgave van ons archief:
 
-            ONDERZOEKSVRAAG: "{onderzoeksvraag}"
+                {index_tekst}
 
-            INSTRUCTIES:
-            1. Welke bestanden/foto's uit de index zijn het meest relevant voor deze specifieke vraag?
-            2. Let goed op het BEDRIJF, PERSONEN en PERIODE/JAARTALLEN.
-            3. Geef maximaal {max_bestanden} meest relevante bestandsnamen terug.
+                ONDERZOEKSVRAAG: "{onderzoeksvraag}"
 
-            Geef UITSLUITEND de bestandsnamen terug gescheiden door komma's. Geen extra tekst.
-            """
+                INSTRUCTIES:
+                1. Welke bestanden/foto's uit de index zijn het meest relevant voor deze specifieke vraag?
+                2. Let goed op het BEDRIJF, PERSONEN, ONDERWERP en PERIODE/JAARTALLEN.
+                3. Geef maximaal {max_bestanden} meest relevante bestandsnamen terug.
 
-            try:
-                res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
-                geselecteerde_bestanden = [b.strip() for b in res_filter.text.split(',') if b.strip()]
-            except Exception as e:
-                st.error(f"Fout tijdens het scannen van de index ({MODEL_NAAM}): {e}")
-                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                    st.info("💡 De API is momenteel druk bezet. Wacht circa 30 seconden en probeer het nogmaals.")
-                st.stop()
+                Geef UITSLUITEND de exacte bestandsnamen terug gescheiden door komma's. Geen extra tekst of labels zoals 'B:'.
+                """
+
+                try:
+                    res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
+                    geselecteerde_bestanden = [b.strip() for b in res_filter.text.split(',') if b.strip()]
+                except Exception as e:
+                    st.error(f"Fout tijdens het scannen van de index ({MODEL_NAAM}): {e}")
+                    if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                        st.info("💡 De API is momenteel druk bezet. Wacht circa 30 seconden en probeer het nogmaals.")
+                    st.stop()
 
         if not geselecteerde_bestanden:
             st.warning("Geen relevante bestanden gevonden op basis van de zoekopdracht.")
             st.stop()
 
-        # STAP 2: Originele documenten ophalen uit Google Drive (Direct via Query)
+        # STAP 2: Originele documenten ophalen uit Google Drive
         with st.spinner("Stap 2/3: Originele documenten ophalen uit Google Drive..."):
             onderzoeks_payload = [
                 f"""Jij bent een financieel-historisch expert en archivaris.
@@ -201,7 +212,10 @@ INSTRUCTIES VOOR JE RAPPORT:
 
             geladen_aantal = 0
             for b_naam in geselecteerde_bestanden:
+                # Schoon de bestandsnaam op van prefixes zoals B: of Bestandsnaam:
                 b_naam_schoon = b_naam.strip("'\" ")
+                if ":" in b_naam_schoon:
+                    b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
                 
                 # 1. Direct in Google Drive zoeken op exacte bestandsnaam
                 query = f"name = '{b_naam_schoon}' and trashed = false"
@@ -300,7 +314,6 @@ if st.session_state.bron_details:
         b_naam = bron["naam"]
         b_id = bron["id"]
         
-        # Genereren van directe Google Drive links
         thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w800"
         drive_view_url = f"https://drive.google.com/file/d/{b_id}/view"
 

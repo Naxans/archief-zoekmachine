@@ -182,23 +182,8 @@ if submit_button:
             st.warning("Geen relevante bestanden gevonden op basis van de zoekopdracht.")
             st.stop()
 
-        # STAP 2: Originele documenten ophalen
+        # STAP 2: Originele documenten ophalen uit Google Drive (Direct via Query)
         with st.spinner("Stap 2/3: Originele documenten ophalen uit Google Drive..."):
-            alle_drive_bestanden = {}
-            page_token = None
-            while True:
-                res = drive_service.files().list(
-                    q="trashed = false",
-                    spaces='drive',
-                    pageToken=page_token,
-                    fields='nextPageToken, files(id, name, mimeType)'
-                ).execute()
-                for f in res.get('files', []):
-                    alle_drive_bestanden[f['name']] = f
-                page_token = res.get('nextPageToken')
-                if not page_token:
-                    break
-
             onderzoeks_payload = [
                 f"""Jij bent een financieel-historisch expert en archivaris.
 Beantwoord onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de meegeleverde originele archiefstukken.
@@ -216,27 +201,42 @@ INSTRUCTIES VOOR JE RAPPORT:
 
             geladen_aantal = 0
             for b_naam in geselecteerde_bestanden:
-                if b_naam in alle_drive_bestanden:
-                    f = alle_drive_bestanden[b_naam]
+                b_naam_schoon = b_naam.strip("'\" ")
+                
+                # 1. Direct in Google Drive zoeken op exacte bestandsnaam
+                query = f"name = '{b_naam_schoon}' and trashed = false"
+                res = drive_service.files().list(q=query, fields='files(id, name, mimeType)').execute()
+                bestanden = res.get('files', [])
+
+                # 2. Als exact niet werkt: flexibele fallback zoekopdracht
+                if not bestanden:
+                    schoon_zonder_ext = b_naam_schoon.replace('.jpg', '').replace('.JPG', '').replace('.jpeg', '').replace('.png', '').replace('.pdf', '')
+                    query_flexibel = f"name contains '{schoon_zonder_ext}' and trashed = false"
+                    res = drive_service.files().list(q=query_flexibel, fields='files(id, name, mimeType)').execute()
+                    bestanden = res.get('files', [])
+
+                if bestanden:
+                    f = bestanden[0]
                     b_id = f['id']
                     b_mime = f['mimeType']
+                    b_real_naam = f['name']
 
-                    # Opslaan voor visuele weergave in de interface
+                    # Opslaan voor visuele weergave
                     st.session_state.bron_details.append({
-                        "naam": b_naam,
+                        "naam": b_real_naam,
                         "id": b_id,
                         "mime": b_mime
                     })
 
                     try:
-                        # 1. GOOGLE DOCS
+                        # Google Docs
                         if b_mime == 'application/vnd.google-apps.document':
                             req = drive_service.files().export_media(fileId=b_id, mimeType='text/plain')
                             doc_txt = req.execute().decode('utf-8', errors='ignore')
-                            onderzoeks_payload.append(f"\n--- INHOUD GOOGLE DOC ({b_naam}) ---\n{doc_txt}")
+                            onderzoeks_payload.append(f"\n--- INHOUD GOOGLE DOC ({b_real_naam}) ---\n{doc_txt}")
                         
-                        # 2. PDF BESTANDEN
-                        elif b_mime == 'application/pdf' or b_naam.lower().endswith('.pdf'):
+                        # PDF Bestanden
+                        elif b_mime == 'application/pdf' or b_real_naam.lower().endswith('.pdf'):
                             req = drive_service.files().get_media(fileId=b_id)
                             pdf_bytes = req.execute()
 
@@ -244,10 +244,10 @@ INSTRUCTIES VOOR JE RAPPORT:
                                 data=pdf_bytes,
                                 mime_type='application/pdf'
                             )
-                            onderzoeks_payload.append(f"\n--- ORIGINELE PDF: {b_naam} ---")
+                            onderzoeks_payload.append(f"\n--- ORIGINELE PDF: {b_real_naam} ---")
                             onderzoeks_payload.append(pdf_part)
 
-                        # 3. AFBEELDINGEN / FOTO'S
+                        # Afbeeldingen / Foto's
                         else:
                             req = drive_service.files().get_media(fileId=b_id)
                             f_data = req.execute()
@@ -265,18 +265,20 @@ INSTRUCTIES VOOR JE RAPPORT:
                                 data=img_byte_arr.getvalue(),
                                 mime_type='image/jpeg'
                             )
-                            onderzoeks_payload.append(f"\n--- ORIGINELE AFBEELDING: {b_naam} ---")
+                            onderzoeks_payload.append(f"\n--- ORIGINELE AFBEELDING: {b_real_naam} ---")
                             onderzoeks_payload.append(img_part)
 
                         geladen_aantal += 1
                     except Exception as e:
-                        st.warning(f"Kon {b_naam} niet laden: {e}")
+                        st.warning(f"Kon {b_real_naam} niet laden: {e}")
+                else:
+                    st.warning(f"Bestand '{b_naam_schoon}' niet gevonden in Google Drive.")
 
         if geladen_aantal == 0:
             st.error("De geselecteerde bestanden konden niet worden teruggevonden in Google Drive.")
             st.stop()
 
-        # STAP 3: Analyse uitvoeren
+        # STAP 3: Analyse uitvoeren via Gemini
         with st.spinner("Stap 3/3: Analyse uitvoeren via Gemini..."):
             try:
                 st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
@@ -292,7 +294,7 @@ INSTRUCTIES VOOR JE RAPPORT:
 if st.session_state.bron_details:
     st.subheader("📁 Geselecteerde bronnen & Afbeeldingen:")
     
-    # Weergave in raster/kolommen voor mooie presentatie
+    # Weergave in een net raster van 3 kolommen
     cols = st.columns(3)
     for index, bron in enumerate(st.session_state.bron_details):
         b_naam = bron["naam"]
@@ -304,7 +306,6 @@ if st.session_state.bron_details:
 
         with cols[index % 3]:
             with st.expander(f"📄 {b_naam}", expanded=True):
-                # Toon de preview-afbeelding (werkt voor PDF's, foto's en gescande documenten)
                 st.image(thumbnail_url, caption=b_naam, use_container_width=True)
                 st.link_button("🔍 Open in hoge resolutie", drive_view_url)
 

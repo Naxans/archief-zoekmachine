@@ -190,12 +190,18 @@ if submit_button:
 
                 ONDERZOEKSVRAAG: "{onderzoeksvraag}"
 
-                INSTRUCTIES:
-                1. Welke bestanden/foto's uit de index zijn het meest relevant voor deze specifieke vraag? Let op BEDRIJF, PERSONEN, ONDERWERP en JAARTAL.
-                2. VERVOLGPAGINA DETECTIE: Akten lopen in kranten/staatsbladen vaak door naar het direct VOLGENDE bestand [N+1]. Als een relevant artikel of bedrijf onderaan of op een pagina staat, neem dan OOK het direct opvolgende bestand op als dat de vervolgpagina bevat!
-                3. Geef maximaal {max_bestanden} meest relevante bestandsnamen terug.
+                STRIKTE SELECTIEREGELS:
+                1. EXACTE BEDRIJFSNAAM MATCH:
+                   - De bedrijfsnaam in de vraag moet EXACT overeenkomen met de gegevens in de index.
+                   - WAARSCHUWING: Selecteer absoluut GEEN documenten van vergelijkbare of soortgelijke bedrijven (bijv. selecteer GEEN 'Radio Belgian Corporation' als er wordt gevraagd om 'Radio Belge de Construction').
+                2. JAARTAL & PERIODE:
+                   - Controleer de datum/periode in de index. Prioriteer documenten uit of rond het gevraagde jaar.
+                3. VERVOLGPAGINA DETECTIE:
+                   - Als een akte over het exacte bedrijf begint op pagina [N] en doorloopt op [N+1], neem dan [N+1] ook mee.
+                4. CAPACITEIT:
+                   - Geef maximaal {max_bestanden} bestandsnamen terug. Als er maar 1 of 2 documenten écht over dit specifieke bedrijf gaan, geef er dan OOK maar 1 of 2 terug! Vul dit NIET aan met irrelevante bedrijven.
 
-                Geef UITSLUITEND de exacte bestandsnamen terug gescheiden door komma's. Geen extra tekst of labels.
+                Geef UITSLUITEND de exacte bestandsnamen terug gescheiden door komma's. Geen extra tekst.
                 """
 
                 try:

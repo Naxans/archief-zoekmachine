@@ -194,7 +194,9 @@ if submit_button:
                 INSTRUCTIES:
                 1. Welke bestanden/foto's uit de index zijn het meest relevant voor deze specifieke vraag?
                 2. Let goed op het BEDRIJF, PERSONEN, ONDERWERP en PERIODE/JAARTALLEN.
-                3. Geef maximaal {max_bestanden} meest relevante bestandsnamen terug.
+                3. BELANGRIJK BIJ MULTI-PAGINA DOCUMENTEN EN STAATSBLADEN:
+                   Als een relevant document of staatsblad uit meerdere bladzijden bestaat (bijv. blz. 1, blz. 2, pag 1, pag 2) of als een melding/akte doorloopt, selecteer dan VERPLICHT OOK de direct opvolgende pagina('s) van datzelfde document of jaartal, zelfs als de bedrijfsnaam op de vervolgpagina niet expliciet herhaald wordt!
+                4. Geef maximaal {max_bestanden} meest relevante bestandsnamen terug.
 
                 Geef UITSLUITEND de exacte bestandsnamen terug gescheiden door komma's. Geen extra tekst of labels zoals 'B:'.
                 """
@@ -215,17 +217,25 @@ if submit_button:
         # STAP 2: Originele documenten ophalen uit Google Drive
         with st.spinner("Stap 2/3: Originele documenten ophalen uit Google Drive..."):
             onderzoeks_payload = [
-                f"""Jij bent een financieel-historisch expert en archivaris.
-Beantwoord onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de meegeleverde originele archiefstukken.
+                f"""Jij bent een financieel-historisch expert en hoofdarchivaris.
+Beantwoord onderstaande onderzoeksvraag grondig en nauwkeurig op basis van de meegeleverde originele archiefstukken en/of foto's.
 
 ONDERZOEKSVRAAG: {onderzoeksvraag}
 
-INSTRUCTIES VOOR JE RAPPORT:
-1. Richt je specifiek op de gevraagde firma, personen en periode.
-2. Structureer je antwoord helder.
-3. Vermeld alle concrete namen, functies, cijfers en details die op de documenten staan.
-4. Citeer steeds de bestandsnaam (bijv. 'document.pdf' of 'foto.jpg') wanneer je naar specifieke informatie verwijst.
-5. Trek een heldere conclusie als antwoord op de vraag.
+CRUCIALE INSTRUCTIES VOOR STRUCTUUR EN CONCLUSIE:
+1. RESPECTEER STRIKT DE CHRONOLOGIE EN WIJZIGINGEN:
+   - Voeg NIET zomaar namen uit verschillende documenten of jaartallen samen tot één enkele statische lijst.
+   - Als document A (bijv. begin 1936) andere bestuursleden/voorzitters noemt dan document B (bijv. eind 1936 of 1937), meld dan expliciet dat er een BESTUURSWIJZIGING, OPVOLGING of WISSEL heeft plaatsgevonden.
+
+2. IN HET EINDRAPPORT EN DE CONCLUSIE:
+   - Presenteer een CHRONOLOGISCH OVERZICHT in plaats van een gemengde/samengevoegde lijst.
+   - Bv: "Oorspronkelijk bestuur volgens bron A (datum X): Voorzitter A..." gevolgd door "Bestuurswijziging volgens bron B (datum Y): Nieuwe voorzitter B t.o.v. A...".
+   - Zet NOOIT twee verschillende personen op precies dezelfde functie (zoals voorzitter) in hetzelfde overzicht zonder uit te leggen wie wie opvolgde en volgens welk document.
+
+3. EXPLICITEER PER ARCHIEFSTUK EN GEBRUIK EXACTE CITATEN:
+   - Controleer ALLE documenten en pagina's van boven naar beneden.
+   - Wijs ALLEEN bestuursleden of functies toe aan een firma waaronder ze daadwerkelijk vermeld staan.
+   - Vermeld per gevonden persoon de exacte functie en de geciteerde bestandsnaam (bijv. 'staatsblad1936-03-28blz2548.jpg').
 """
             ]
 

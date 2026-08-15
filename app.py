@@ -1,318 +1,366 @@
-# ==============================================================================
-# STREAMLIT ARCHIEF-ZOEKMACHINE (GITHUB / STREAMLIT CLOUD)
-# ==============================================================================
-
 import io
 import time
 import logging
 import warnings
-from PIL import Image
 import streamlit as st
+from PIL import Image
 import gspread
-from google.oauth2 import service_account
+from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from google import genai
 from google.genai import types
 
-# Silencer voor SDK-waarschuwingen
+# SDK meldingen onderdrukken voor schone logs
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
 
-# PAGINA CONFIGURATIE
-st.set_page_config(
-    page_title="Archief Zoekmachine",
-    page_icon="📜",
-    layout="wide"
-)
+# ------------------------------------------------------------------------------
+# 1. AUTHENTICATIE VIA STREAMLIT SECRETS
+# ------------------------------------------------------------------------------
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
-st.title("📜 Historisch Archief Onderzoek")
+@st.cache_resource
+def init_services():
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=SCOPES
+    )
+    gc = gspread.authorize(creds)
+    drive_service = build('drive', 'v3', credentials=creds)
+    ai_client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+    return gc, drive_service, ai_client
 
-# CONFIGURATIE SIDESCREEN / SECRETS
-st.sidebar.header("⚙️ Instellingen & Sleutels")
-
-# Gemini API Key ophalen uit st.secrets of invoerveld
-api_key = st.secrets.get("GEMINI_API_KEY", None)
-if not api_key:
-    api_key = st.sidebar.text_input("Plak je Gemini API Key:", type="password")
-
-if not api_key:
-    st.warning("⚠️ Voer a.u.b. een Gemini API Key in via de zijbalk of st.secrets om te starten.")
-    st.stop()
-
-# Service Account voor Google Drive & Sheets ophalen
 try:
-    if "gcp_service_account" in st.secrets:
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        creds = service_account.Credentials.from_service_account_info(
-            creds_dict,
-            scopes=[
-                'https://www.googleapis.com/auth/drive.readonly',
-                'https://www.googleapis.com/auth/spreadsheets.readonly'
-            ]
-        )
-    else:
-        st.error("❌ Geen Google Service Account referenties gevonden in Streamlit Secrets (`gcp_service_account`).")
-        st.stop()
+    gc, drive_service, ai_client = init_services()
 except Exception as e:
-    st.error(f"❌ Fout bij authenticatie met Google Services: {e}")
+    st.error(f"Fout bij verbinden met Google/Gemini diensten: {e}")
     st.stop()
 
-# INITIALISATIE CLIENTS
-ai_client = genai.Client(api_key=api_key)
-drive_service = build('drive', 'v3', credentials=creds)
-gc = gspread.authorize(creds)
-
+# ------------------------------------------------------------------------------
+# 2. CONFIGURATIE & DYNAMISCHE MODEL-DETECTIE
+# ------------------------------------------------------------------------------
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
-# MODEL DETECTOR
-@st.cache_resource
-def bepaal_actief_model(_client):
+def bepaal_werkend_model(client):
+    """Vraagt actieve modellen op bij Google en test welke daadwerkelijk werkt."""
     kandidaten = [
-        'gemini-2.0-flash-lite',
         'gemini-2.0-flash',
+        'gemini-2.0-flash-lite',
         'gemini-1.5-flash-002',
-        'gemini-1.5-flash',
         'gemini-1.5-pro-002'
     ]
-    for m in kandidaten:
+    
+    try:
+        voorradig = [m.name.replace("models/", "") for m in client.models.list()]
+        for m in voorradig:
+            if m not in kandidaten and 'gemini' in m:
+                kandidaten.append(m)
+    except Exception:
+        pass
+
+    for model_naam in kandidaten:
         try:
-            _client.models.generate_content(model=m, contents="ping")
-            return m
+            client.models.generate_content(model=model_naam, contents="ping")
+            return model_naam
         except Exception:
             continue
-    return 'gemini-2.0-flash-lite'
 
-MODEL_NAAM = bepaal_actief_model(ai_client)
-st.sidebar.success(f"✓ AI-Model: `{MODEL_NAAM}`")
+    return None
 
-# RETRY HULPFUNCTIE
-def stuur_met_retry(chat_or_client, contents, is_chat=False, max_retries=3):
+MODEL_NAAM = bepaal_werkend_model(ai_client)
+
+def genereer_met_retry(client, model, contents, max_retries=3):
+    """Voert een API-call uit en wacht automatisch als de TPM-limiet (429) bereikt wordt."""
     for poging in range(max_retries):
         try:
-            if is_chat:
-                return chat_or_client.send_message(contents)
-            else:
-                return chat_or_client.models.generate_content(model=MODEL_NAAM, contents=contents)
+            return client.models.generate_content(model=model, contents=contents)
         except Exception as e:
             err_msg = str(e)
             if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
-                wait_time = (poging + 1) * 8
-                st.warning(f"⚠️ API limiet bereikt. Wachten voor {wait_time} seconden...")
-                time.sleep(wait_time)
-            else:
-                raise e
-    raise Exception("Max retries overschreden wegens API limieten.")
+                if poging < max_retries - 1:
+                    time.sleep(12)
+                    continue
+            raise e
 
-# INVOERFORMULIER
-with st.form("zoek_formulier"):
-    onderzoeksvraag = st.text_input(
-        "Onderzoeksvraag:",
-        placeholder="Bijv: Geef me de bestuursleden van Radio Belge de Construction in 1936"
-    )
-    max_bestanden = st.slider("Max bronnen ophalen:", min_value=5, max_value=50, value=15, step=5)
-    submit_knop = st.form_submit_button("Voer Onderzoek Uit", type="primary")
-
-# HOOFDLOGICA BIJ ZOEKEN
-if submit_knop and onderzoeksvraag.strip():
-    # Sessie resetten voor nieuwe zoekopdracht
+# Session state variabelen
+if "actieve_chat" not in st.session_state:
     st.session_state.actieve_chat = None
-    st.session_state.messages = []
+if "chat_historie" not in st.session_state:
+    st.session_state.chat_historie = []
+if "bron_details" not in st.session_state:
+    st.session_state.bron_details = []
+if "gestopt" not in st.session_state:
+    st.session_state.gestopt = False
 
-    st.subheader("🔎 Stap 1: Inhoudsopgave Scannen")
-    
-    try:
-        sh = gc.open(SHEET_NAAM)
-        worksheet = sh.sheet1
-        alle_records = worksheet.get_all_records()
-        data = [row for row in alle_records if str(row.get('Bestandsnaam', '')).strip()]
-    except Exception as e:
-        st.error(f"Kon de Google Sheet '{SHEET_NAAM}' niet openen: {e}")
-        st.stop()
+# ------------------------------------------------------------------------------
+# 3. STREAMLIT INTERFACE
+# ------------------------------------------------------------------------------
+st.set_page_config(page_title="Archief Zoekmachine", page_icon="🔍", layout="wide")
+st.title("🔍 Archief Zoekmachine")
 
-    if not data:
-        st.error("De Google Sheet is leeg of bevat geen geldige gegevens.")
-        st.stop()
+if MODEL_NAAM:
+    st.caption(f"Actief AI-model: `{MODEL_NAAM}`")
+else:
+    st.error("Kon geen werkend Gemini-model vinden voor deze API-sleutel. Controleer je Gemini API key.")
+    st.stop()
 
-    # Directe match
-    geselecteerde_bestanden = []
-    for row in data:
-        b_naam_sheet = str(row.get('Bestandsnaam', '')).strip()
-        if b_naam_sheet and b_naam_sheet.lower() in onderzoeksvraag.lower():
-            geselecteerde_bestanden.append(b_naam_sheet)
+# Invoer van de onderzoeksvraag & parameters
+col1, col2 = st.columns([3, 1])
+with col1:
+    onderzoeksvraag = st.text_area(
+        "Vraag:",
+        placeholder='Bijv: Geef me de bestuursleden van de firma "Radio Belge de Construction" in het jaar 1935',
+        height=100
+    )
+with col2:
+    max_bestanden = st.slider("Max bronnen:", min_value=5, max_value=50, value=15, step=5)
 
-    # AI Filter op index
-    if not geselecteerde_bestanden:
-        index_regels = []
-        for row in data:
-            b_naam_val = row.get('Bestandsnaam') or row.get('Bestandsnaam (ID)') or ''
-            regel = f"Bestandsnaam: {b_naam_val} | Datum: {row.get('Datum Document')} | Personen: {row.get('Genoemde Personen')} | Onderwerp: {row.get('Onderwerp (NL)')}"
-            index_regels.append(regel)
+# Knoppenbalk met Actie- en Stop-knoppen
+btn_col1, btn_col2 = st.columns([2, 1])
+with btn_col1:
+    submit_button = st.button("🔍 Voer onderzoek uit", type="primary", use_container_width=True)
+with btn_col2:
+    stop_button = st.button("⛔ Stop / Annuleer", type="secondary", use_container_width=True)
 
-        index_tekst = "\n".join(index_regels)
-        if len(index_tekst) > 250000:
-            index_tekst = index_tekst[:250000]
+# Directe stop-afhandeling
+if stop_button:
+    st.session_state.gestopt = True
+    st.warning("⚠️ Onderzoek is direct geannuleerd.")
+    st.stop()
 
-        filter_prompt = f"""
-        Jij bent hoofdarchivaris. Hieronder staat de inhoudsopgave van ons archief:
-
-        {index_tekst}
-
-        ONDERZOEKSVRAAG: "{onderzoeksvraag}"
-
-        CRUCIALE INSTRUCTIES:
-        1. Welke bestanden/foto's uit de index zijn het meest relevant voor deze specifieke vraag?
-        2. Let heel goed op de FIRMANAAM, PERSONEN, DATUM/JAARTAL en ONDERWERPEN.
-        3. BELANGRIJK BIJ MULTI-PAGINA DOCUMENTEN EN STAATSBLADEN:
-           Als een relevant document of staatsblad uit meerdere bladzijden bestaat (bijv. blz. 1, blz. 2, pag 1, pag 2) of als een melding/akte doorloopt, selecteer dan VERPLICHT OOK de direct opvolgende pagina('s) van datzelfde document of jaartal, zelfs als de bedrijfsnaam op de vervolgpagina niet expliciet herhaald wordt!
-        4. Geef maximaal {max_bestanden} meest relevante bestandsnamen terug.
-
-        Geef UITSLUITEND de bestandsnamen terug gescheiden door komma's. Geen extra tekst.
-        """
-
-        with st.spinner("AI scant de inhoudsopgave op relevante documenten en opvolgende pagina's..."):
+# ------------------------------------------------------------------------------
+# 4. ONDERZOEKSLOGICA
+# ------------------------------------------------------------------------------
+if submit_button:
+    if not onderzoeksvraag.strip():
+        st.warning("Voer a.u.b. een onderzoeksvraag in.")
+    else:
+        st.session_state.gestopt = False
+        st.session_state.chat_historie = []
+        st.session_state.bron_details = []
+        
+        # STAP 1: Inhoudsopgave scannen
+        with st.spinner("Stap 1/3: Inhoudsopgave (Google Sheet) scannen..."):
             try:
-                res_filter = stuur_met_retry(ai_client, filter_prompt, is_chat=False)
-                geselecteerde_bestanden = [b.strip() for b in res_filter.text.split(',') if b.strip()]
+                sh = gc.open(SHEET_NAAM)
+                worksheet = sh.sheet1
+                alle_records = worksheet.get_all_records()
+                
+                # Filter lege rijen uit
+                data = [row for row in alle_records if str(row.get('Bestandsnaam', '')).strip()]
             except Exception as e:
-                st.error(f"Fout bij filteren van de index: {e}")
+                st.error(f"Kon de Google Sheet niet openen: {e}")
                 st.stop()
 
-    st.write(f"**Geselecteerde documenten ({len(geselecteerde_bestanden)} stuks):**")
-    for b in geselecteerde_bestanden:
-        st.markdown(f"- `{b}`")
+            if not data:
+                st.error("De Google Sheet bevat geen geldige gegevens.")
+                st.stop()
 
-    if not geselecteerde_bestanden:
-        st.warning("Geen relevante bestanden gevonden op basis van je zoekopdracht.")
-        st.stop()
+            # Controle op tussentijdse stop
+            if st.session_state.gestopt:
+                st.stop()
 
-    # OPHALEN UIT DRIVE
-    st.subheader("📥 Stap 2: Originele Documenten Ophalen & Analyseren")
-    
-    onderzoeks_payload = [
-        f"""Jij bent een financieel-historisch expert en hoofdarchivaris.
-Beantwoord onderstaande onderzoeksvraag grondig en nauwkeurig op basis van de meegeleverde originele archiefstukken en/of foto's.
+            # Directe bestandsnaam check
+            geselecteerde_bestanden = []
+            for row in data:
+                b_naam_sheet = str(row.get('Bestandsnaam', '')).strip()
+                if b_naam_sheet and b_naam_sheet.lower() in onderzoeksvraag.lower():
+                    geselecteerde_bestanden.append(b_naam_sheet)
+
+            # Zoek via Gemini als er geen directe naam match is
+            if not geselecteerde_bestanden:
+                index_regels = []
+                for row in data:
+                    b_naam_val = row.get('Bestandsnaam') or row.get('Bestandsnaam (ID)') or ''
+                    regel = f"Bestandsnaam: {b_naam_val} | Datum: {row.get('Datum Document')} | Personen: {row.get('Genoemde Personen')} | Onderwerp: {row.get('Onderwerp (NL)')}"
+                    index_regels.append(regel)
+
+                index_tekst = "\n".join(index_regels)
+                
+                if len(index_tekst) > 250000:
+                    index_tekst = index_tekst[:250000]
+
+                filter_prompt = f"""
+                Jij bent hoofdarchivaris. Hieronder staat de volledige inhoudsopgave van ons archief:
+
+                {index_tekst}
+
+                ONDERZOEKSVRAAG: "{onderzoeksvraag}"
+
+                INSTRUCTIES:
+                1. Welke bestanden/foto's uit de index zijn het meest relevant voor deze specifieke vraag?
+                2. Let goed op het BEDRIJF, PERSONEN, ONDERWERP en PERIODE/JAARTALLEN.
+                3. Geef maximaal {max_bestanden} meest relevante bestandsnamen terug.
+
+                Geef UITSLUITEND de exacte bestandsnamen terug gescheiden door komma's. Geen extra tekst of labels zoals 'B:'.
+                """
+
+                try:
+                    res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
+                    geselecteerde_bestanden = [b.strip() for b in res_filter.text.split(',') if b.strip()]
+                except Exception as e:
+                    st.error(f"Fout tijdens het scannen van de index ({MODEL_NAAM}): {e}")
+                    if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                        st.info("💡 De API is momenteel druk bezet. Wacht circa 30 seconden en probeer het nogmaals.")
+                    st.stop()
+
+        if not geselecteerde_bestanden:
+            st.warning("Geen relevante bestanden gevonden op basis van de zoekopdracht.")
+            st.stop()
+
+        # STAP 2: Originele documenten ophalen uit Google Drive
+        with st.spinner("Stap 2/3: Originele documenten ophalen uit Google Drive..."):
+            onderzoeks_payload = [
+                f"""Jij bent een financieel-historisch expert en archivaris.
+Beantwoord onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de meegeleverde originele archiefstukken.
 
 ONDERZOEKSVRAAG: {onderzoeksvraag}
 
-CRUCIALE INSTRUCTIES VOOR STRUCTUUR EN CONCLUSIE:
-1. RESPECTEER STRIKT DE CHRONOLOGIE EN WIJZIGINGEN:
-   - Voeg NIET zomaar namen uit verschillende documenten of jaartallen samen tot één enkele statische lijst.
-   - Als document A (bijv. begin 1936) andere bestuursleden/voorzitters noemt dan document B (bijv. eind 1936 of 1937), meld dan expliciet dat er een BESTUURSWIJZIGING, OPVOLGING of WISSEL heeft plaatsgevonden.
-
-2. IN HET EINDRAPPORT EN DE CONCLUSIE:
-   - Presenteer een CHRONOLOGISCH OVERZICHT in plaats van een gemengde/samengevoegde lijst.
-   - Bv: "Oorspronkelijk bestuur volgens bron A (datum X): Voorzitter A..." gevolgd door "Bestuurswijziging volgens bron B (datum Y): Nieuwe voorzitter B t.o.v. A...".
-   - Zet NOOIT twee verschillende personen op precies dezelfde functie (zoals voorzitter) in hetzelfde overzicht zonder uit te leggen wie wie opvolgde en volgens welk document.
-
-3. EXPLICITEER PER ARCHIEFSTUK EN GEBRUIK EXACTE CITATEN:
-   - Controleer ALLE documenten en pagina's van boven naar beneden.
-   - Wijs ALLEEN bestuursleden of functies toe aan een firma waaronder ze daadwerkelijk vermeld staan.
-   - Vermeld per gevonden persoon de exacte functie en de geciteerde bestandsnaam (bijv. 'staatsblad1936-03-28blz2548.jpg').
+INSTRUCTIES VOOR JE RAPPORT:
+1. Richt je specifiek op de gevraagde firma, personen en periode.
+2. Structureer je antwoord helder.
+3. Vermeld alle concrete namen, functies, cijfers en details die op de documenten staan.
+4. Citeer steeds de bestandsnaam (bijv. 'document.pdf' of 'foto.jpg') wanneer je naar specifieke informatie verwijst.
+5. Trek een heldere conclusie als antwoord op de vraag.
 """
-    ]
+            ]
 
-    geladen_aantal = 0
-    cols = st.columns(3)
+            geladen_aantal = 0
+            for b_naam in geselecteerde_bestanden:
+                # Interruptiecontrole binnen de ophaallus
+                if st.session_state.gestopt:
+                    st.warning("Onderzoek geannuleerd bij het ophalen van bestanden.")
+                    st.stop()
 
-    for i, b_naam in enumerate(geselecteerde_bestanden):
-        b_naam_schoon = b_naam.strip("'\" ")
-        if ":" in b_naam_schoon:
-            b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
+                b_naam_schoon = b_naam.strip("'\" ")
+                if ":" in b_naam_schoon:
+                    b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
+                
+                query = f"name = '{b_naam_schoon}' and trashed = false"
+                res = drive_service.files().list(q=query, fields='files(id, name, mimeType)').execute()
+                bestanden = res.get('files', [])
 
-        query = f"name = '{b_naam_schoon}' and trashed = false"
-        res = drive_service.files().list(q=query, fields='files(id, name, mimeType)').execute()
-        bestanden = res.get('files', [])
+                if not bestanden:
+                    schoon_zonder_ext = b_naam_schoon.replace('.jpg', '').replace('.JPG', '').replace('.jpeg', '').replace('.png', '').replace('.pdf', '')
+                    query_flexibel = f"name contains '{schoon_zonder_ext}' and trashed = false"
+                    res = drive_service.files().list(q=query_flexibel, fields='files(id, name, mimeType)').execute()
+                    bestanden = res.get('files', [])
 
-        if not bestanden:
-            schoon_zonder_ext = b_naam_schoon.replace('.jpg', '').replace('.JPG', '').replace('.jpeg', '').replace('.png', '').replace('.pdf', '')
-            query_flexibel = f"name contains '{schoon_zonder_ext}' and trashed = false"
-            res = drive_service.files().list(q=query_flexibel, fields='files(id, name, mimeType)').execute()
-            bestanden = res.get('files', [])
+                if bestanden:
+                    f = bestanden[0]
+                    b_id = f['id']
+                    b_mime = f['mimeType']
+                    b_real_naam = f['name']
 
-        if bestanden:
-            f = bestanden[0]
-            b_id = f['id']
-            b_mime = f['mimeType']
-            b_real_naam = f['name']
-            drive_view_url = f"https://drive.google.com/file/d/{b_id}/view"
+                    st.session_state.bron_details.append({
+                        "naam": b_real_naam,
+                        "id": b_id,
+                        "mime": b_mime
+                    })
+
+                    try:
+                        if b_mime == 'application/vnd.google-apps.document':
+                            req = drive_service.files().export_media(fileId=b_id, mimeType='text/plain')
+                            doc_txt = req.execute().decode('utf-8', errors='ignore')
+                            onderzoeks_payload.append(f"\n--- INHOUD GOOGLE DOC ({b_real_naam}) ---\n{doc_txt}")
+                        
+                        elif b_mime == 'application/pdf' or b_real_naam.lower().endswith('.pdf'):
+                            req = drive_service.files().get_media(fileId=b_id)
+                            pdf_bytes = req.execute()
+
+                            pdf_part = types.Part.from_bytes(
+                                data=pdf_bytes,
+                                mime_type='application/pdf'
+                            )
+                            onderzoeks_payload.append(f"\n--- ORIGINELE PDF: {b_real_naam} ---")
+                            onderzoeks_payload.append(pdf_part)
+
+                        else:
+                            req = drive_service.files().get_media(fileId=b_id)
+                            f_data = req.execute()
+
+                            img = Image.open(io.BytesIO(f_data))
+                            if img.mode != 'RGB':
+                                img = img.convert('RGB')
+                            
+                            img.thumbnail((800, 800))
+
+                            img_byte_arr = io.BytesIO()
+                            img.save(img_byte_arr, format='JPEG', quality=70)
+
+                            img_part = types.Part.from_bytes(
+                                data=img_byte_arr.getvalue(),
+                                mime_type='image/jpeg'
+                            )
+                            onderzoeks_payload.append(f"\n--- ORIGINELE AFBEELDING: {b_real_naam} ---")
+                            onderzoeks_payload.append(img_part)
+
+                        geladen_aantal += 1
+                    except Exception as e:
+                        st.warning(f"Kon {b_real_naam} niet laden: {e}")
+                else:
+                    st.warning(f"Bestand '{b_naam_schoon}' niet gevonden in Google Drive.")
+
+        if geladen_aantal == 0:
+            st.error("De geselecteerde bestanden konden niet worden teruggevonden in Google Drive.")
+            st.stop()
+
+        # STAP 3: Analyse uitvoeren via Gemini
+        with st.spinner("Stap 3/3: Analyse uitvoeren via Gemini..."):
+            if st.session_state.gestopt:
+                st.warning("Onderzoek geannuleerd voor de AI-analyse.")
+                st.stop()
 
             try:
-                # 1. GOOGLE DOCS
-                if b_mime == 'application/vnd.google-apps.document':
-                    req = drive_service.files().export_media(fileId=b_id, mimeType='text/plain')
-                    doc_txt = req.execute().decode('utf-8', errors='ignore')
-                    onderzoeks_payload.append(f"\n--- INHOUD GOOGLE DOC ({b_real_naam}) ---\n{doc_txt}")
-                    st.markdown(f"📄 **{b_real_naam}** ([Open Google Doc]({drive_view_url}))")
-
-                # 2. PDF BESTANDEN
-                elif b_mime == 'application/pdf' or b_real_naam.lower().endswith('.pdf'):
-                    req = drive_service.files().get_media(fileId=b_id)
-                    pdf_bytes = req.execute()
-
-                    pdf_part = types.Part.from_bytes(
-                        data=pdf_bytes,
-                        mime_type='application/pdf'
-                    )
-                    onderzoeks_payload.append(f"\n--- ORIGINELE PDF: {b_real_naam} ---")
-                    onderzoeks_payload.append(pdf_part)
-                    st.markdown(f"📕 **{b_real_naam}** ([Open PDF in Drive]({drive_view_url}))")
-
-                # 3. AFBEELDINGEN
-                else:
-                    req = drive_service.files().get_media(fileId=b_id)
-                    f_data = req.execute()
-
-                    img = Image.open(io.BytesIO(f_data))
-                    if img.mode != 'RGB':
-                        img = img.convert('RGB')
-
-                    col_idx = geladen_aantal % 3
-                    with cols[col_idx]:
-                        st.image(img, caption=b_real_naam, use_container_width=True)
-                        st.markdown(f"[🔍 Open Hoge Resolutie]({drive_view_url})")
-
-                    img.thumbnail((800, 800))
-                    img_byte_arr = io.BytesIO()
-                    img.save(img_byte_arr, format='JPEG', quality=70)
-
-                    img_part = types.Part.from_bytes(
-                        data=img_byte_arr.getvalue(),
-                        mime_type='image/jpeg'
-                    )
-                    onderzoeks_payload.append(f"\n--- ORIGINELE AFBEELDING: {b_real_naam} ---")
-                    onderzoeks_payload.append(img_part)
-
-                geladen_aantal += 1
+                st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
+                analyse_response = st.session_state.actieve_chat.send_message(onderzoeks_payload)
+                st.session_state.chat_historie.append(("assistant", analyse_response.text))
             except Exception as e:
-                st.warning(f"Kon {b_real_naam} niet laden: {e}")
+                st.error(f"Fout tijdens Gemini analyse: {e}")
+                st.info("💡 Tip: Probeer 'Max bronnen' te verlagen naar bijv. 5 bronnen om binnen de limieten te blijven.")
 
-    # ANALYSE UITVOEREN
-    if geladen_aantal > 0:
-        with st.spinner("🔍 Gemini voert een diepgaande analyse uit op alle documenten..."):
-            chat = ai_client.chats.create(model=MODEL_NAAM)
-            response = stuur_met_retry(chat, onderzoeks_payload, is_chat=True)
+# ------------------------------------------------------------------------------
+# 5. WEERGAVE BRONNEN MET PREVIEWS & RAPPORT
+# ------------------------------------------------------------------------------
+if st.session_state.bron_details:
+    st.subheader("📁 Geselecteerde bronnen & Afbeeldingen:")
+    
+    cols = st.columns(3)
+    for index, bron in enumerate(st.session_state.bron_details):
+        b_naam = bron["naam"]
+        b_id = bron["id"]
+        
+        thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w800"
+        drive_view_url = f"https://drive.google.com/file/d/{b_id}/view"
 
-            st.session_state.actieve_chat = chat
-            st.session_state.messages = [{"role": "assistant", "content": response.text}]
+        with cols[index % 3]:
+            with st.expander(f"📄 {b_naam}", expanded=True):
+                st.image(thumbnail_url, caption=b_naam, use_container_width=True)
+                st.link_button("🔍 Open in hoge resolutie", drive_view_url)
 
-# CHAT INTERFACE VOOR VERVOLGVRAAGEN
-if "actieve_chat" in st.session_state and st.session_state.actieve_chat:
-    st.markdown("---")
-    st.subheader("📊 Onderzoeksrapport")
+if st.session_state.chat_historie:
+    st.divider()
+    st.subheader("📑 Historisch Onderzoeksrapport")
+    
+    for rol, tekst in st.session_state.chat_historie:
+        with st.chat_message(rol):
+            st.write(tekst)
 
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    vervolgvraag = st.chat_input("Stel een vervolgvraag over deze resultaten...")
-    if vervolgvraag:
-        st.session_state.messages.append({"role": "user", "content": vervolgvraag})
+    # Vervolgvragen stellen
+    if vervolgvraag := st.chat_input("Stel een vervolgvraag over dit rapport..."):
+        st.session_state.chat_historie.append(("user", vervolgvraag))
         with st.chat_message("user"):
-            st.markdown(vervolgvraag)
-
+            st.write(vervolgvraag)
+            
         with st.chat_message("assistant"):
             with st.spinner("Analyseren..."):
-                res = stuur_met_retry(st.session_state.actieve_chat, vervolgvraag, is_chat=True)
-                st.markdown(res.text)
-                st.session_state.messages.append({"role": "assistant", "content": res.text})
+                try:
+                    response = st.session_state.actieve_chat.send_message(vervolgvraag)
+                    st.write(response.text)
+                    st.session_state.chat_historie.append(("assistant", response.text))
+                except Exception as e:
+                    st.error(f"Fout bij verwerken vervolgvraag: {e}")

@@ -73,11 +73,11 @@ def bepaal_werkend_model(client):
 
 MODEL_NAAM = bepaal_werkend_model(ai_client)
 
-def genereer_met_retry(client, model, contents, max_retries=3):
-    """Voert een API-call uit en wacht automatisch als de TPM-limiet (429) bereikt wordt."""
+def genereer_met_retry(client, model, contents, config=None, max_retries=3):
+    """Voert een API-call uit met retries en temperatuurcontrole."""
     for poging in range(max_retries):
         try:
-            return client.models.generate_content(model=model, contents=contents)
+            return client.models.generate_content(model=model, contents=contents, config=config)
         except Exception as e:
             err_msg = str(e)
             if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
@@ -160,7 +160,6 @@ if submit_button:
                 st.error("De Google Sheet bevat geen geldige gegevens.")
                 st.stop()
 
-            # Controle op tussentijdse stop
             if st.session_state.gestopt:
                 st.stop()
 
@@ -174,9 +173,9 @@ if submit_button:
             # Zoek via Gemini als er geen directe naam match is
             if not geselecteerde_bestanden:
                 index_regels = []
-                for row in data:
+                for i, row in enumerate(data, 1):
                     b_naam_val = row.get('Bestandsnaam') or row.get('Bestandsnaam (ID)') or ''
-                    regel = f"Bestandsnaam: {b_naam_val} | Datum: {row.get('Datum Document')} | Personen: {row.get('Genoemde Personen')} | Onderwerp: {row.get('Onderwerp (NL)')}"
+                    regel = f"[{i}] Bestandsnaam: {b_naam_val} | Datum: {row.get('Datum Document')} | Personen: {row.get('Genoemde Personen')} | Onderwerp: {row.get('Onderwerp (NL)')}"
                     index_regels.append(regel)
 
                 index_tekst = "\n".join(index_regels)
@@ -185,22 +184,24 @@ if submit_button:
                     index_tekst = index_tekst[:250000]
 
                 filter_prompt = f"""
-                Jij bent hoofdarchivaris. Hieronder staat de volledige inhoudsopgave van ons archief:
+                Jij bent hoofdarchivaris. Hieronder staat de chronologische inhoudsopgave van ons archief met volgnummers [N]:
 
                 {index_tekst}
 
                 ONDERZOEKSVRAAG: "{onderzoeksvraag}"
 
                 INSTRUCTIES:
-                1. Welke bestanden/foto's uit de index zijn het meest relevant voor deze specifieke vraag?
-                2. Let goed op het BEDRIJF, PERSONEN, ONDERWERP en PERIODE/JAARTALLEN.
+                1. Welke bestanden/foto's uit de index zijn het meest relevant voor deze specifieke vraag? Let op BEDRIJF, PERSONEN, ONDERWERP en JAARTAL.
+                2. VERVOLGPAGINA DETECTIE: Akten lopen in kranten/staatsbladen vaak door naar het direct VOLGENDE bestand [N+1]. Als een relevant artikel of bedrijf onderaan of op een pagina staat, neem dan OOK het direct opvolgende bestand op als dat de vervolgpagina bevat!
                 3. Geef maximaal {max_bestanden} meest relevante bestandsnamen terug.
 
-                Geef UITSLUITEND de exacte bestandsnamen terug gescheiden door komma's. Geen extra tekst of labels zoals 'B:'.
+                Geef UITSLUITEND de exacte bestandsnamen terug gescheiden door komma's. Geen extra tekst of labels.
                 """
 
                 try:
-                    res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
+                    # Config met temperature=0.0 voor 100% consistente selectie
+                    stricte_config = types.GenerateContentConfig(temperature=0.0)
+                    res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt, config=stricte_config)
                     geselecteerde_bestanden = [b.strip() for b in res_filter.text.split(',') if b.strip()]
                 except Exception as e:
                     st.error(f"Fout tijdens het scannen van de index ({MODEL_NAAM}): {e}")
@@ -212,26 +213,27 @@ if submit_button:
             st.warning("Geen relevante bestanden gevonden op basis van de zoekopdracht.")
             st.stop()
 
+        # Toon direct welke bronnen gekozen zijn ter controle
+        st.info(f"📌 Geselecteerde archiefstukken ({len(geselecteerde_bestanden)}): {', '.join(geselecteerde_bestanden)}")
+
         # STAP 2: Originele documenten ophalen uit Google Drive
         with st.spinner("Stap 2/3: Originele documenten ophalen uit Google Drive..."):
             onderzoeks_payload = [
                 f"""Jij bent een financieel-historisch expert en archivaris.
-Beantwoord onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de meegeleverde originele archiefstukken.
+Beantwoord onderstaande onderzoeksvraag grondig, feitelijk en zonder aannames op basis van de meegeleverde archiefstukken.
 
 ONDERZOEKSVRAAG: {onderzoeksvraag}
 
 INSTRUCTIES VOOR JE RAPPORT:
-1. Richt je specifiek op de gevraagde firma, personen en periode.
-2. Structureer je antwoord helder.
-3. Vermeld alle concrete namen, functies, cijfers en details die op de documenten staan.
-4. Citeer steeds de bestandsnaam (bijv. 'document.pdf' of 'foto.jpg') wanneer je naar specifieke informatie verwijst.
-5. Trek een heldere conclusie als antwoord op de vraag.
+1. VERVOLGPAGINA'S: De bestanden staan in chronologische volgorde. Een akte kan op pagina 1 beginnen (bedrijfsnaam) en op pagina 2 doorlopen (bestuursleden). Lees opeenvolgende pagina's in samenhang met elkaar.
+2. STRIKTE BEWIJSVOERING: Citeer bij elke gevonden persoon eerst de exacte, letterlijke tekstregel uit de afbeelding/het document waarin de naam staat.
+3. Vermeld steeds de exacte bestandsnaam bij de geciteerde details.
+4. Trek een heldere conclusie als antwoord op de vraag.
 """
             ]
 
             geladen_aantal = 0
             for b_naam in geselecteerde_bestanden:
-                # Interruptiecontrole binnen de ophaallus
                 if st.session_state.gestopt:
                     st.warning("Onderzoek geannuleerd bij het ophalen van bestanden.")
                     st.stop()
@@ -316,7 +318,9 @@ INSTRUCTIES VOOR JE RAPPORT:
                 st.stop()
 
             try:
-                st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
+                # Chat initialiseren op temperature 0.0 voor deterministische uitvoer
+                stricte_config = types.GenerateContentConfig(temperature=0.0)
+                st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM, config=stricte_config)
                 analyse_response = st.session_state.actieve_chat.send_message(onderzoeks_payload)
                 st.session_state.chat_historie.append(("assistant", analyse_response.text))
             except Exception as e:

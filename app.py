@@ -278,7 +278,7 @@ INSTRUCTIES VOOR JE RAPPORT:
                 st.session_state.chat_historie.append(("assistant", analyse_response.text))
             except Exception as e:
                 st.error(f"Fout tijdens Gemini analyse: {e}")
-                st.info("💡 Tip: Probeer 'Max bronnen' te verlagen naar bijv. 3 tot 5 bronnen om binnen de limieten te blijven.")
+                st.info("💡 Tip: Probeer 'Max bronnen' te verlagen naar bijv. 5 bronnen om binnen de limieten te blijven.")
 
 # ------------------------------------------------------------------------------
 # 5. WEERGAVE RESULTAAT & CHAT

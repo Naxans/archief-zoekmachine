@@ -130,18 +130,21 @@ if submit_button:
         st.session_state.chat_historie = []
         st.session_state.bron_details = []
         
-        # STAP 1: Inhoudsopgave scannen
+        # STAP 1: Inhoudsopgave scannen (Alleen gevulde rijen)
         with st.spinner("Stap 1/3: Inhoudsopgave (Google Sheet) scannen..."):
             try:
                 sh = gc.open(SHEET_NAAM)
                 worksheet = sh.sheet1
-                data = worksheet.get_all_records()
+                alle_records = worksheet.get_all_records()
+                
+                # OPTIE 2: Filter direct alle rijen uit zonder bestandsnaam
+                data = [row for row in alle_records if str(row.get('Bestandsnaam', '')).strip()]
             except Exception as e:
                 st.error(f"Kon de Google Sheet niet openen: {e}")
                 st.stop()
 
             if not data:
-                st.error("De Google Sheet bevat nog geen data of is leeg.")
+                st.error("De Google Sheet bevat geen geldige gegevens.")
                 st.stop()
 
             # Snelle check: Is er direct naar een specifieke bestandsnaam gevraagd?
@@ -151,7 +154,7 @@ if submit_button:
                 if b_naam_sheet and b_naam_sheet.lower() in onderzoeksvraag.lower():
                     geselecteerde_bestanden.append(b_naam_sheet)
 
-            # Als er geen directe bestandsnaam in de vraag stond, vraag Gemini om de Sheet te doorzoeken
+            # Als er geen directe bestandsnaam in de vraag stond, doorzoek via Gemini
             if not geselecteerde_bestanden:
                 index_regels = []
                 for row in data:
@@ -161,7 +164,7 @@ if submit_button:
 
                 index_tekst = "\n".join(index_regels)
                 
-                # Ruime limiet zodat alle 1.000+ rijen meegaan
+                # Ruime limiet op te versturen tekst
                 if len(index_tekst) > 250000:
                     index_tekst = index_tekst[:250000]
 
@@ -212,7 +215,7 @@ INSTRUCTIES VOOR JE RAPPORT:
 
             geladen_aantal = 0
             for b_naam in geselecteerde_bestanden:
-                # Schoon de bestandsnaam op van prefixes zoals B: of Bestandsnaam:
+                # Schoon de bestandsnaam op van aanhalingstekens of B: / Bestandsnaam: prefixes
                 b_naam_schoon = b_naam.strip("'\" ")
                 if ":" in b_naam_schoon:
                     b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()

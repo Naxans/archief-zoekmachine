@@ -176,7 +176,8 @@ if submit_button:
                 index_regels = []
                 for row in data:
                     b_naam_val = row.get('Bestandsnaam') or row.get('Bestandsnaam (ID)') or ''
-                    regel = f"Bestandsnaam: {b_naam_val} | Datum: {row.get('Datum Document')} | Personen: {row.get('Genoemde Personen')} | Onderwerp: {row.get('Onderwerp (NL)')}"
+                    doc_id_val = row.get('Document_ID', '')
+                    regel = f"Bestandsnaam: {b_naam_val} | Document_ID: {doc_id_val} | Datum: {row.get('Datum Document')} | Personen: {row.get('Genoemde Personen')} | Onderwerp: {row.get('Onderwerp (NL)')}"
                     index_regels.append(regel)
 
                 index_tekst = "\n".join(index_regels)
@@ -211,6 +212,30 @@ if submit_button:
         if not geselecteerde_bestanden:
             st.warning("Geen relevante bestanden gevonden op basis van de zoekopdracht.")
             st.stop()
+
+        # STAP 1.5: Uitbreiden op basis van Document_ID
+        gekoppelde_doc_ids = set()
+        eind_bestanden_lijst = []
+
+        for row in data:
+            b_naam_sheet = str(row.get('Bestandsnaam', '')).strip()
+            doc_id = str(row.get('Document_ID', '')).strip()
+            
+            # Controleer of dit bestand geselecteerd was
+            if any(b_naam_sheet.lower() == g_b.lower() for g_b in geselecteerde_bestanden):
+                if doc_id:
+                    gekoppelde_doc_ids.add(doc_id)
+
+        # Voeg alle bestanden toe die bij dezelfde Document_ID's horen
+        for row in data:
+            b_naam_sheet = str(row.get('Bestandsnaam', '')).strip()
+            doc_id = str(row.get('Document_ID', '')).strip()
+            
+            if (doc_id and doc_id in gekoppelde_doc_ids) or (b_naam_sheet in geselecteerde_bestanden):
+                if b_naam_sheet not in eind_bestanden_lijst:
+                    eind_bestanden_lijst.append(b_naam_sheet)
+
+        geselecteerde_bestanden = eind_bestanden_lijst
 
         # STAP 2: Originele documenten ophalen uit Google Drive
         with st.spinner("Stap 2/3: Originele documenten ophalen uit Google Drive..."):

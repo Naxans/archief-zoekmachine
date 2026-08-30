@@ -40,21 +40,28 @@ except Exception as e:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 2. CONFIGURATIE & MODEL-DETECTIE
+# 2. CONFIGURATIE & DYNAMISCHE MODEL-DETECTIE
 # ------------------------------------------------------------------------------
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
 def bepaal_werkend_model(client):
-    """Test een vaste lijst van stabiele modellen zonder dynamische aanvulling."""
+    """Vraagt actieve modellen op bij Google en test welke daadwerkelijk werkt."""
     kandidaten = [
-        'gemini-2.5-flash',
-        'gemini-2.5-flash-001',
         'gemini-2.0-flash',
-        'gemini-2.0-flash-001',
-        'gemini-1.5-flash'
+        'gemini-2.0-flash-lite',
+        'gemini-1.5-flash-002',
+        'gemini-1.5-pro-002'
     ]
     
+    try:
+        voorradig = [m.name.replace("models/", "") for m in client.models.list()]
+        for m in voorradig:
+            if m not in kandidaten and 'gemini' in m:
+                kandidaten.append(m)
+    except Exception:
+        pass
+
     for model_naam in kandidaten:
         try:
             client.models.generate_content(model=model_naam, contents="ping")
@@ -213,7 +220,7 @@ INSTRUCTIES:
 2. Let goed op PERSONEN, ONDERWERP en DATUM/PERIODE.
 3. Geef maximaal {max_dossiers} meest relevante Document_ID's terug.
 
-Geef UITSLUITEND de exacta Document_ID's terug gescheiden door komma's. Geen extra tekst of uitleg.
+Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's. Geen extra tekst of uitleg.
 """
 
                 try:

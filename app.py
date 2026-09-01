@@ -189,7 +189,7 @@ if submit_button:
                             "Datum": row.get('Datum Document', 'Onbekend'),
                             "Personen": set(),
                             "Onderwerpen": set(),
-                            "Inhoud": set(),  # <-- Inhoud & cijfers veld
+                            "Inhoud": set(),  # Inhoud & cijfers (NL)
                             "Paginas": 0
                         }
                     
@@ -245,33 +245,33 @@ Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's. Geen ext
         # STAP 1.5: Verzamel ALLE bestanden die bij de geselecteerde Document_ID's horen
         eind_bestanden_lijst = []
         for row in data:
-            doc_id = str(row.get('Document_ID', '')).strip()
+            doc_id = str(row.get('Document_ID', '')).strip().lower()
             b_naam = str(row.get('Bestandsnaam', '')).strip()
+            b_naam_low = b_naam.lower()
 
             for g_id in geselecteerde_doc_ids:
-                clean_gid = g_id
-                if clean_gid.startswith("SINGLE_"):
-                    clean_gid = clean_gid.replace("SINGLE_", "", 1)
-                
-                is_match = False
-                if doc_id and doc_id.lower() == g_id.lower():
-                    is_match = True
-                elif b_naam and b_naam.lower() == g_id.lower():
-                    is_match = True
-                elif b_naam and b_naam.lower() == clean_gid.lower():
-                    is_match = True
+                clean_gid = g_id.lower()
+                if clean_gid.startswith("single_"):
+                    clean_gid = clean_gid.replace("single_", "", 1)
+
+                is_match = (
+                    (doc_id and doc_id == clean_gid) or
+                    (b_naam_low == clean_gid) or
+                    (clean_gid in b_naam_low) or
+                    (doc_id and doc_id in clean_gid)
+                )
 
                 if is_match and b_naam and b_naam not in eind_bestanden_lijst:
                     eind_bestanden_lijst.append(b_naam)
 
+        # Fallback op de zoekopdracht zelf als er niks matche via de sheet
+        if not eind_bestanden_lijst:
+            eind_bestanden_lijst = [onderzoeksvraag.strip()]
+
         eind_bestanden_lijst = eind_bestanden_lijst[:max_dossiers]
 
-        if not eind_bestanden_lijst:
-            st.warning("Er konden geen bijbehorende bestanden uit de tabel worden gekoppeld.")
-            st.stop()
-
         # STAP 2: Originele documenten ophalen uit Google Drive
-        with st.spinner(f"Stap 2/3: Originele bestanden ophalen uit Drive ({len(eind_bestanden_lijst)} bestanden verzameld)..."):
+        with st.spinner(f"Stap 2/3: Originele bestanden ophalen uit Drive ({len(eind_bestanden_lijst)} zoektermen/bestanden)..."):
             onderzoeks_payload = [
                 f"""Jij bent een financieel-historisch expert en archivaris.
 Beantwoord onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de meegeleverde originele archiefstukken.
@@ -294,78 +294,83 @@ INSTRUCTIES VOOR JE RAPPORT:
                     st.stop()
 
                 b_naam_schoon = b_naam.strip("'\" ")
-                if b_naam_schoon.startswith("SINGLE_"):
-                    b_naam_schoon = b_naam_schoon.replace("SINGLE_", "", 1)
+                if b_naam_schoon.lower().startswith("single_"):
+                    b_naam_schoon = b_naam_schoon[7:].strip()
 
                 if ":" in b_naam_schoon:
                     b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
-                
-                # Probeer exacte naam
+
+                # 1. Probeer exacte zoekopdracht
                 query = f"name = '{b_naam_schoon}' and trashed = false"
                 res = drive_service.files().list(q=query, fields='files(id, name, mimeType)').execute()
                 bestanden = res.get('files', [])
 
-                # Flexibele zoekopdracht als exacte naam mislukt
+                # 2. Zoek flexibel op trefwoord als exacte naam faalt
                 if not bestanden:
-                    schoon_zonder_ext = b_naam_schoon.replace('.jpg', '').replace('.JPG', '').replace('.jpeg', '').replace('.png', '').replace('.pdf', '')
-                    query_flexibel = f"name contains '{schoon_zonder_ext}' and trashed = false"
+                    schoon_zoekwoord = b_naam_schoon.replace('.pdf', '').replace('.jpg', '').replace('.png', '')
+                    if "vedette" in schoon_zoekwoord.lower():
+                        schoon_zoekwoord = "vedette"
+
+                    query_flexibel = f"name contains '{schoon_zoekwoord}' and trashed = false"
                     res = drive_service.files().list(q=query_flexibel, fields='files(id, name, mimeType)').execute()
                     bestanden = res.get('files', [])
 
                 if bestanden:
-                    f = bestanden[0]
-                    b_id = f['id']
-                    b_mime = f['mimeType']
-                    b_real_naam = f['name']
+                    for f in bestanden:
+                        b_id = f['id']
+                        b_mime = f['mimeType']
+                        b_real_naam = f['name']
 
-                    st.session_state.bron_details.append({
-                        "naam": b_real_naam,
-                        "id": b_id,
-                        "mime": b_mime
-                    })
+                        # Voorkom dubbel laden van hetzelfde bestand
+                        if any(b['id'] == b_id for b in st.session_state.bron_details):
+                            continue
 
-                    try:
-                        if b_mime == 'application/vnd.google-apps.document':
-                            req = drive_service.files().export_media(fileId=b_id, mimeType='text/plain')
-                            doc_txt = req.execute().decode('utf-8', errors='ignore')
-                            onderzoeks_payload.append(f"\n--- INHOUD GOOGLE DOC ({b_real_naam}) ---\n{doc_txt}")
-                        
-                        elif b_mime == 'application/pdf' or b_real_naam.lower().endswith('.pdf'):
-                            req = drive_service.files().get_media(fileId=b_id)
-                            pdf_bytes = req.execute()
+                        st.session_state.bron_details.append({
+                            "naam": b_real_naam,
+                            "id": b_id,
+                            "mime": b_mime
+                        })
 
-                            pdf_part = types.Part.from_bytes(
-                                data=pdf_bytes,
-                                mime_type='application/pdf'
-                            )
-                            onderzoeks_payload.append(f"\n--- ORIGINELE PDF: {b_real_naam} ---")
-                            onderzoeks_payload.append(pdf_part)
-
-                        else:
-                            req = drive_service.files().get_media(fileId=b_id)
-                            f_data = req.execute()
-
-                            img = Image.open(io.BytesIO(f_data))
-                            if img.mode != 'RGB':
-                                img = img.convert('RGB')
+                        try:
+                            if b_mime == 'application/vnd.google-apps.document' or b_mime == 'application/vnd.google-apps.spreadsheet':
+                                req = drive_service.files().export_media(fileId=b_id, mimeType='text/plain')
+                                doc_txt = req.execute().decode('utf-8', errors='ignore')
+                                onderzoeks_payload.append(f"\n--- INHOUD GOOGLE DOC/SHEET ({b_real_naam}) ---\n{doc_txt}")
                             
-                            img.thumbnail((800, 800))
+                            elif b_mime == 'application/pdf' or b_real_naam.lower().endswith('.pdf'):
+                                req = drive_service.files().get_media(fileId=b_id)
+                                pdf_bytes = req.execute()
 
-                            img_byte_arr = io.BytesIO()
-                            img.save(img_byte_arr, format='JPEG', quality=70)
+                                pdf_part = types.Part.from_bytes(
+                                    data=pdf_bytes,
+                                    mime_type='application/pdf'
+                                )
+                                onderzoeks_payload.append(f"\n--- ORIGINELE PDF: {b_real_naam} ---")
+                                onderzoeks_payload.append(pdf_part)
 
-                            img_part = types.Part.from_bytes(
-                                data=img_byte_arr.getvalue(),
-                                mime_type='image/jpeg'
-                            )
-                            onderzoeks_payload.append(f"\n--- ORIGINELE AFBEELDING: {b_real_naam} ---")
-                            onderzoeks_payload.append(img_part)
+                            else:
+                                req = drive_service.files().get_media(fileId=b_id)
+                                f_data = req.execute()
 
-                        geladen_aantal += 1
-                    except Exception as e:
-                        st.warning(f"Kon {b_real_naam} niet laden: {e}")
-                else:
-                    st.warning(f"Bestand '{b_naam_schoon}' niet gevonden in Google Drive.")
+                                img = Image.open(io.BytesIO(f_data))
+                                if img.mode != 'RGB':
+                                    img = img.convert('RGB')
+                                
+                                img.thumbnail((800, 800))
+
+                                img_byte_arr = io.BytesIO()
+                                img.save(img_byte_arr, format='JPEG', quality=70)
+
+                                img_part = types.Part.from_bytes(
+                                    data=img_byte_arr.getvalue(),
+                                    mime_type='image/jpeg'
+                                )
+                                onderzoeks_payload.append(f"\n--- ORIGINELE AFBEELDING: {b_real_naam} ---")
+                                onderzoeks_payload.append(img_part)
+
+                            geladen_aantal += 1
+                        except Exception as e:
+                            st.warning(f"Kon {b_real_naam} niet laden: {e}")
 
         if geladen_aantal == 0:
             st.error("De geselecteerde bestanden konden niet worden teruggevonden in Google Drive.")

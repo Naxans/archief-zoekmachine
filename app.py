@@ -48,11 +48,6 @@ SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 def bepaal_werkend_model(client):
     """
     Vraagt actieve modellen op bij Google en test welke daadwerkelijk werkt.
-    
-    ONDERHOUDSTIP:
-    Als Google een nieuw hoofdmodel uitbrengt (bijv. 'gemini-3.0-flash'), 
-    zet deze naam dan BOVENAAN in het onderstaande lijstje 'kandidaten' 
-    om het de eerste keus te maken.
     """
     kandidaten = [
         'gemini-2.0-flash',
@@ -225,7 +220,8 @@ ONDERZOEKSVRAAG: "{onderzoeksvraag}"
 INSTRUCTIES:
 1. Welke dossiers (Document_ID's) uit het overzicht zijn het meest relevant voor deze specifieke vraag?
 2. Let goed op PERSONEN, ONDERWERP en DATUM/PERIODE.
-3. Geef maximaal {max_dossiers} meest relevante Document_ID's terug.
+3. LET OP: Maak expliciet onderscheid tussen "S.A. Radio Belge de Construction" (RBC Tongeren) en "Radio Broadcasting Company" (R.B.C. Leuven). Selecteer alleen wat voor de vraag relevant is.
+4. Geef maximaal {max_dossiers} meest relevante Document_ID's terug.
 
 Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's. Geen extra tekst of uitleg.
 """
@@ -367,20 +363,29 @@ INSTRUCTIES VOOR JE RAPPORT:
 # 5. WEERGAVE BRONNEN MET PREVIEWS & RAPPORT
 # ------------------------------------------------------------------------------
 if st.session_state.bron_details:
-    st.subheader("📁 Geselecteerde bronnen & Afbeeldingen:")
+    st.subheader("📁 Geselecteerde bronnen & Documenten:")
     
     cols = st.columns(3)
     for index, bron in enumerate(st.session_state.bron_details):
         b_naam = bron["naam"]
         b_id = bron["id"]
+        b_mime = bron.get("mime", "")
         
         thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w800"
         drive_view_url = f"https://drive.google.com/file/d/{b_id}/view"
 
         with cols[index % 3]:
             with st.expander(f"📄 {b_naam}", expanded=True):
-                st.image(thumbnail_url, caption=b_naam, use_container_width=True)
-                st.link_button("🔍 Open in hoge resolutie", drive_view_url)
+                if b_mime == 'application/pdf' or b_naam.lower().endswith('.pdf'):
+                    st.info("📕 **PDF Document**")
+                    try:
+                        st.image(thumbnail_url, caption=b_naam, use_container_width=True)
+                    except Exception:
+                        st.write("*(Geen voorbeeldweergave beschikbaar voor deze PDF)*")
+                else:
+                    st.image(thumbnail_url, caption=b_naam, use_container_width=True)
+                
+                st.link_button("🔍 Open origineel in Google Drive", drive_view_url)
 
 if st.session_state.chat_historie:
     st.divider()

@@ -143,7 +143,7 @@ if submit_button:
         st.session_state.bron_details = []
         
         # STAP 1: Inhoudsopgave scannen uit Google Sheet
-        with st.spinner("Stap 1/3: Inhoudsopgave (Google Sheet) scannen..."):
+        with st.spinner("Stap 1/3: Inhoudsopgave (Google Sheet) scannen via AI..."):
             try:
                 sh = gc.open(SHEET_NAAM)
                 worksheet = sh.sheet1
@@ -162,116 +162,88 @@ if submit_button:
             if st.session_state.gestopt:
                 st.stop()
 
-            geselecteerde_doc_ids = []
-
-            # A. Directe match op Document_ID of Bestandsnaam in zoekopdracht
+            # Bouw de compacte index per dossier/bestand voor Gemini
+            dossier_samenvattingen = {}
             for row in data:
-                doc_id_val = str(row.get('Document_ID', '')).strip()
-                b_naam_val = str(row.get('Bestandsnaam', '')).strip()
+                doc_id = str(row.get('Document_ID', '')).strip()
+                b_naam = str(row.get('Bestandsnaam', '')).strip()
                 
-                if (doc_id_val and doc_id_val.lower() in onderzoeksvraag.lower()) or \
-                   (b_naam_val and b_naam_val.lower() in onderzoeksvraag.lower()):
-                    if doc_id_val and doc_id_val not in geselecteerde_doc_ids:
-                        geselecteerde_doc_ids.append(doc_id_val)
+                # Unieke ID toewijzen als Document_ID leeg is
+                key_id = doc_id if doc_id else f"SINGLE_{b_naam}"
 
-            # B. Zoek via Gemini naar relevante Document_ID's als er geen directe match was
-            if not geselecteerde_doc_ids:
-                dossier_samenvattingen = {}
-                for row in data:
-                    doc_id = str(row.get('Document_ID', '')).strip()
-                    b_naam = str(row.get('Bestandsnaam', '')).strip()
-                    
-                    if not doc_id:
-                        doc_id = f"SINGLE_{b_naam}"
+                if key_id not in dossier_samenvattingen:
+                    dossier_samenvattingen[key_id] = {
+                        "Datum": row.get('Datum Document', 'Onbekend'),
+                        "Personen": set(),
+                        "Onderwerpen": set(),
+                        "Inhoud": set(),
+                        "Bestanden": []
+                    }
+                
+                dossier_samenvattingen[key_id]["Bestanden"].append(b_naam)
+                if row.get('Genoemde Personen'):
+                    dossier_samenvattingen[key_id]["Personen"].add(str(row.get('Genoemde Personen')))
+                if row.get('Onderwerp (NL)'):
+                    dossier_samenvattingen[key_id]["Onderwerpen"].add(str(row.get('Onderwerp (NL)')))
+                if row.get('Inhoud & cijfers (NL)'):
+                    dossier_samenvattingen[key_id]["Inhoud"].add(str(row.get('Inhoud & cijfers (NL)')))
 
-                    if doc_id not in dossier_samenvattingen:
-                        dossier_samenvattingen[doc_id] = {
-                            "Datum": row.get('Datum Document', 'Onbekend'),
-                            "Personen": set(),
-                            "Onderwerpen": set(),
-                            "Inhoud": set(),  # Inhoud & cijfers (NL)
-                            "Paginas": 0
-                        }
-                    
-                    dossier_samenvattingen[doc_id]["Paginas"] += 1
-                    if row.get('Genoemde Personen'):
-                        dossier_samenvattingen[doc_id]["Personen"].add(str(row.get('Genoemde Personen')))
-                    if row.get('Onderwerp (NL)'):
-                        dossier_samenvattingen[doc_id]["Onderwerpen"].add(str(row.get('Onderwerp (NL)')))
-                    if row.get('Inhoud & cijfers (NL)'):
-                        dossier_samenvattingen[doc_id]["Inhoud"].add(str(row.get('Inhoud & cijfers (NL)')))
+            index_regels = []
+            for d_id, d_info in dossier_samenvattingen.items():
+                pers_str = ", ".join(d_info["Personen"]) if d_info["Personen"] else "Geen"
+                ond_str = ", ".join(d_info["Onderwerpen"]) if d_info["Onderwerpen"] else "Geen"
+                inhoud_str = " | ".join(d_info["Inhoud"]) if d_info["Inhoud"] else "Geen"
+                
+                regel = f"ID: {d_id} | Datum: {d_info['Datum']} | Personen: {pers_str} | Onderwerp: {ond_str} | Inhoud: {inhoud_str}"
+                index_regels.append(regel)
 
-                index_regels = []
-                for d_id, d_info in dossier_samenvattingen.items():
-                    pers_str = ", ".join(d_info["Personen"]) if d_info["Personen"] else "Geen"
-                    ond_str = ", ".join(d_info["Onderwerpen"]) if d_info["Onderwerpen"] else "Geen"
-                    inhoud_str = " | ".join(d_info["Inhoud"]) if d_info["Inhoud"] else "Geen"
-                    
-                    regel = f"Document_ID: {d_id} | Datum: {d_info['Datum']} | Personen: {pers_str} | Onderwerp: {ond_str} | Inhoud & Cijfers: {inhoud_str}"
-                    index_regels.append(regel)
+            index_tekst = "\n".join(index_regels)
+            if len(index_tekst) > 250000:
+                index_tekst = index_tekst[:250000]
 
-                index_tekst = "\n".join(index_regels)
-                if len(index_tekst) > 250000:
-                    index_tekst = index_tekst[:250000]
-
-                filter_prompt = f"""
-Jij bent hoofdarchivaris. Hieronder staat een overzicht van de unieke dossiers (Document_ID's) en bestanden in ons archief, inclusief hun specifieke inhoud:
+            # Vraag AI om de meest relevante ID's te selecteren
+            filter_prompt = f"""
+Jij bent hoofdarchivaris. Hieronder staat de inhoudsopgave van ons archief (ID, personen, onderwerp en gedetailleerde inhoud per dossier of bestand):
 
 {index_tekst}
 
 ONDERZOEKSVRAAG: "{onderzoeksvraag}"
 
 INSTRUCTIES:
-1. Welke dossiers of bestanden (Document_ID's) uit het overzicht zijn het meest relevant voor deze vraag?
-2. Let heel goed op INHOUD & CIJFERS, PERSONEN, ONDERWERP en SPECIFIEKE MERKNAMEN/MODELLEN in de tekst.
-3. Geef maximaal {max_dossiers} meest relevante Document_ID's terug.
+1. Analyseer welke dossiers/bestanden inhoudelijk ECHT relevant zijn voor de onderzoeksvraag.
+2. Selecteer ALLEEN de ID's die inhoudelijk aansluiten. Selecteer NIET zomaar willekeurige documenten.
+3. Selecteer maximaal {max_dossiers} ID's. Als er maar 2 of 3 relevant zijn, geef er dan OOK maar 2 of 3 terug!
 
-Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's. Geen extra tekst of uitleg.
+Geef UITSLUITEND de exacte geselecteerde ID's terug gescheiden door komma's. Geen extra tekst.
 """
 
-                try:
-                    res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
-                    geselecteerde_doc_ids = [d.strip() for d in res_filter.text.split(',') if d.strip()]
-                except Exception as e:
-                    st.error(f"Fout tijdens het scannen van de index ({MODEL_NAAM}): {e}")
-                    if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                        st.info("💡 De API is momenteel druk bezet. Wacht circa 30 seconden en probeer het nogmaals.")
-                    st.stop()
+            try:
+                res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
+                geselecteerde_ids = [d.strip() for d in res_filter.text.split(',') if d.strip()]
+            except Exception as e:
+                st.error(f"Fout tijdens het scannen van de index ({MODEL_NAAM}): {e}")
+                st.stop()
 
-        if not geselecteerde_doc_ids:
-            st.warning("Geen relevante documenten gevonden op basis van de zoekopdracht.")
+        if not geselecteerde_ids:
+            st.warning("Geen relevante documenten gevonden voor deze vraag.")
             st.stop()
 
-        # STAP 1.5: Verzamel ALLE bestanden die bij de geselecteerde Document_ID's horen
+        # STAP 1.5: Vertaal de geselecteerde ID's exact naar bestandsnamen
         eind_bestanden_lijst = []
-        for row in data:
-            doc_id = str(row.get('Document_ID', '')).strip().lower()
-            b_naam = str(row.get('Bestandsnaam', '')).strip()
-            b_naam_low = b_naam.lower()
+        for g_id in geselecteerde_ids:
+            if g_id in dossier_samenvattingen:
+                for b in dossier_samenvattingen[g_id]["Bestanden"]:
+                    if b not in eind_bestanden_lijst:
+                        eind_bestanden_lijst.append(b)
 
-            for g_id in geselecteerde_doc_ids:
-                clean_gid = g_id.lower()
-                if clean_gid.startswith("single_"):
-                    clean_gid = clean_gid.replace("single_", "", 1)
-
-                is_match = (
-                    (doc_id and doc_id == clean_gid) or
-                    (b_naam_low == clean_gid) or
-                    (clean_gid in b_naam_low) or
-                    (doc_id and doc_id in clean_gid)
-                )
-
-                if is_match and b_naam and b_naam not in eind_bestanden_lijst:
-                    eind_bestanden_lijst.append(b_naam)
-
-        # Fallback op de zoekopdracht zelf als er niks matche via de sheet
         if not eind_bestanden_lijst:
-            eind_bestanden_lijst = [onderzoeksvraag.strip()]
+            st.warning("De geselecteerde dossiers bevatten geen geldige bestandsnamen.")
+            st.stop()
 
-        eind_bestanden_lijst = eind_bestanden_lijst[:max_dossiers]
+        st.info(f"🎯 AI heeft **{len(geselecteerde_ids)} relevante dossier(s)** geselecteerd met in totaal **{len(eind_bestanden_lijst)} bestand(en)**.")
 
         # STAP 2: Originele documenten ophalen uit Google Drive
-        with st.spinner(f"Stap 2/3: Originele bestanden ophalen uit Drive ({len(eind_bestanden_lijst)} zoektermen/bestanden)..."):
+        with st.spinner(f"Stap 2/3: Originele bestanden ophalen uit Drive ({len(eind_bestanden_lijst)} bestanden)..."):
             onderzoeks_payload = [
                 f"""Jij bent een financieel-historisch expert en archivaris.
 Beantwoord onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de meegeleverde originele archiefstukken.
@@ -294,90 +266,83 @@ INSTRUCTIES VOOR JE RAPPORT:
                     st.stop()
 
                 b_naam_schoon = b_naam.strip("'\" ")
-                if b_naam_schoon.lower().startswith("single_"):
-                    b_naam_schoon = b_naam_schoon[7:].strip()
 
-                if ":" in b_naam_schoon:
-                    b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
-
-                # 1. Probeer exacte zoekopdracht
+                # Zoek het specifieke bestand op in Drive
                 query = f"name = '{b_naam_schoon}' and trashed = false"
                 res = drive_service.files().list(q=query, fields='files(id, name, mimeType)').execute()
                 bestanden = res.get('files', [])
 
-                # 2. Zoek flexibel op trefwoord als exacte naam faalt
                 if not bestanden:
-                    schoon_zoekwoord = b_naam_schoon.replace('.pdf', '').replace('.jpg', '').replace('.png', '')
-                    if "vedette" in schoon_zoekwoord.lower():
-                        schoon_zoekwoord = "vedette"
-
-                    query_flexibel = f"name contains '{schoon_zoekwoord}' and trashed = false"
+                    # Kleine fallback als de extensie afwijkt
+                    schoon_zonder_ext = b_naam_schoon.rsplit('.', 1)[0]
+                    query_flexibel = f"name contains '{schoon_zonder_ext}' and trashed = false"
                     res = drive_service.files().list(q=query_flexibel, fields='files(id, name, mimeType)').execute()
                     bestanden = res.get('files', [])
 
                 if bestanden:
-                    for f in bestanden:
-                        b_id = f['id']
-                        b_mime = f['mimeType']
-                        b_real_naam = f['name']
+                    f = bestanden[0]
+                    b_id = f['id']
+                    b_mime = f['mimeType']
+                    b_real_naam = f['name']
 
-                        # Voorkom dubbel laden van hetzelfde bestand
-                        if any(b['id'] == b_id for b in st.session_state.bron_details):
-                            continue
+                    if any(b['id'] == b_id for b in st.session_state.bron_details):
+                        continue
 
-                        st.session_state.bron_details.append({
-                            "naam": b_real_naam,
-                            "id": b_id,
-                            "mime": b_mime
-                        })
+                    st.session_state.bron_details.append({
+                        "naam": b_real_naam,
+                        "id": b_id,
+                        "mime": b_mime
+                    })
 
-                        try:
-                            if b_mime == 'application/vnd.google-apps.document' or b_mime == 'application/vnd.google-apps.spreadsheet':
-                                req = drive_service.files().export_media(fileId=b_id, mimeType='text/plain')
-                                doc_txt = req.execute().decode('utf-8', errors='ignore')
-                                onderzoeks_payload.append(f"\n--- INHOUD GOOGLE DOC/SHEET ({b_real_naam}) ---\n{doc_txt}")
+                    try:
+                        if b_mime == 'application/vnd.google-apps.document' or b_mime == 'application/vnd.google-apps.spreadsheet':
+                            req = drive_service.files().export_media(fileId=b_id, mimeType='text/plain')
+                            doc_txt = req.execute().decode('utf-8', errors='ignore')
+                            onderzoeks_payload.append(f"\n--- INHOUD GOOGLE DOC/SHEET ({b_real_naam}) ---\n{doc_txt}")
+                        
+                        elif b_mime == 'application/pdf' or b_real_naam.lower().endswith('.pdf'):
+                            req = drive_service.files().get_media(fileId=b_id)
+                            pdf_bytes = req.execute()
+
+                            pdf_part = types.Part.from_bytes(
+                                data=pdf_bytes,
+                                mime_type='application/pdf'
+                            )
+                            onderzoeks_payload.append(f"\n--- ORIGINELE PDF: {b_real_naam} ---")
+                            onderzoeks_payload.append(pdf_part)
+
+                        else:
+                            req = drive_service.files().get_media(fileId=b_id)
+                            f_data = req.execute()
+
+                            img = Image.open(io.BytesIO(f_data))
+                            if img.mode != 'RGB':
+                                img = img.convert('RGB')
                             
-                            elif b_mime == 'application/pdf' or b_real_naam.lower().endswith('.pdf'):
-                                req = drive_service.files().get_media(fileId=b_id)
-                                pdf_bytes = req.execute()
+                            img.thumbnail((800, 800))
 
-                                pdf_part = types.Part.from_bytes(
-                                    data=pdf_bytes,
-                                    mime_type='application/pdf'
-                                )
-                                onderzoeks_payload.append(f"\n--- ORIGINELE PDF: {b_real_naam} ---")
-                                onderzoeks_payload.append(pdf_part)
+                            img_byte_arr = io.BytesIO()
+                            img.save(img_byte_arr, format='JPEG', quality=70)
 
-                            else:
-                                req = drive_service.files().get_media(fileId=b_id)
-                                f_data = req.execute()
+                            img_part = types.Part.from_bytes(
+                                data=img_byte_arr.getvalue(),
+                                mime_type='image/jpeg'
+                            )
+                            onderzoeks_payload.append(f"\n--- ORIGINELE AFBEELDING: {b_real_naam} ---")
+                            onderzoeks_payload.append(img_part)
 
-                                img = Image.open(io.BytesIO(f_data))
-                                if img.mode != 'RGB':
-                                    img = img.convert('RGB')
-                                
-                                img.thumbnail((800, 800))
-
-                                img_byte_arr = io.BytesIO()
-                                img.save(img_byte_arr, format='JPEG', quality=70)
-
-                                img_part = types.Part.from_bytes(
-                                    data=img_byte_arr.getvalue(),
-                                    mime_type='image/jpeg'
-                                )
-                                onderzoeks_payload.append(f"\n--- ORIGINELE AFBEELDING: {b_real_naam} ---")
-                                onderzoeks_payload.append(img_part)
-
-                            geladen_aantal += 1
-                        except Exception as e:
-                            st.warning(f"Kon {b_real_naam} niet laden: {e}")
+                        geladen_aantal += 1
+                    except Exception as e:
+                        st.warning(f"Kon {b_real_naam} niet laden: {e}")
+                else:
+                    st.warning(f"Bestand '{b_naam_schoon}' kon niet worden gevonden in Google Drive.")
 
         if geladen_aantal == 0:
-            st.error("De geselecteerde bestanden konden niet worden teruggevonden in Google Drive.")
+            st.error("Geen van de gekozen bestanden kon uit Google Drive gehaald worden.")
             st.stop()
 
         # STAP 3: Analyse uitvoeren via Gemini
-        with st.spinner("Stap 3/3: Analyse uitvoeren via Gemini..."):
+        with st.spinner("Stap 3/3: Diepgaande analyse uitvoeren op de geselecteerde bestanden..."):
             if st.session_state.gestopt:
                 st.warning("Onderzoek geannuleerd voor de AI-analyse.")
                 st.stop()
@@ -388,7 +353,6 @@ INSTRUCTIES VOOR JE RAPPORT:
                 st.session_state.chat_historie.append(("assistant", analyse_response.text))
             except Exception as e:
                 st.error(f"Fout tijdens Gemini analyse: {e}")
-                st.info("💡 Tip: Probeer 'Max dossiers' te verlagen naar bijv. 5 dossiers om binnen de limieten te blijven.")
 
 # ------------------------------------------------------------------------------
 # 5. WEERGAVE BRONNEN MET PREVIEWS & RAPPORT

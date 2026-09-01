@@ -46,6 +46,14 @@ DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
 def bepaal_werkend_model(client):
+    """
+    Vraagt actieve modellen op bij Google en test welke daadwerkelijk werkt.
+    
+    ONDERHOUDSTIP:
+    Als Google een nieuw hoofdmodel uitbrengt (bijv. 'gemini-3.0-flash'), 
+    zet deze naam dan BOVENAAN in het onderstaande lijstje 'kandidaten' 
+    om het de eerste keus te maken.
+    """
     kandidaten = [
         'gemini-2.0-flash',
         'gemini-2.0-flash-lite',
@@ -73,6 +81,7 @@ def bepaal_werkend_model(client):
 MODEL_NAAM = bepaal_werkend_model(ai_client)
 
 def genereer_met_retry(client, model, contents, max_retries=3):
+    """Voert een API-call uit en wacht automatisch als de TPM-limiet (429) bereikt wordt."""
     for poging in range(max_retries):
         try:
             return client.models.generate_content(model=model, contents=contents)
@@ -106,22 +115,25 @@ else:
     st.error("Kon geen werkend Gemini-model vinden voor deze API-sleutel. Controleer je Gemini API key.")
     st.stop()
 
+# Invoer van de onderzoeksvraag & parameters
 col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: Wat weet je over de radio model Vedette?',
+        placeholder='Bijv: Geef me de bestuursleden van de firma "Radio Belge de Construction" in het jaar 1935',
         height=100
     )
 with col2:
-    max_dossiers = st.slider("Max dossiers / bestanden:", min_value=5, max_value=50, value=15, step=5)
+    max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=15, step=5)
 
+# Knoppenbalk met Actie- en Stop-knoppen
 btn_col1, btn_col2 = st.columns([2, 1])
 with btn_col1:
     submit_button = st.button("🔍 Voer onderzoek uit", type="primary", use_container_width=True)
 with btn_col2:
     stop_button = st.button("⛔ Stop / Annuleer", type="secondary", use_container_width=True)
 
+# Directe stop-afhandeling
 if stop_button:
     st.session_state.gestopt = True
     st.warning("⚠️ Onderzoek is direct geannuleerd.")
@@ -144,6 +156,8 @@ if submit_button:
                 sh = gc.open(SHEET_NAAM)
                 worksheet = sh.sheet1
                 alle_records = worksheet.get_all_records()
+                
+                # Filter lege rijen uit
                 data = [row for row in alle_records if str(row.get('Bestandsnaam', '')).strip()]
             except Exception as e:
                 st.error(f"Kon de Google Sheet niet openen: {e}")
@@ -156,136 +170,103 @@ if submit_button:
             if st.session_state.gestopt:
                 st.stop()
 
-            geselecteerde_keys = []
+            geselecteerde_doc_ids = []
 
-            # A. HARD-CHECK OP SPECIFIEKE TREFWOORDEN
-            generieke_woorden = {
-                'radio', 'radios', 'record', 'royal', 'rbc', 'model', 'modellen', 
-                'over', 'weet', 'geef', 'welke', 'document', 'dossier', 'het', 'een', 'van'
-            }
-            
-            specifieke_zoekwoorden = [
-                w.lower() for w in onderzoeksvraag.split() 
-                if len(w) > 3 and w.lower() not in generieke_woorden
-            ]
+            # Directe match op Document_ID of Bestandsnaam in zoekopdracht
+            for row in data:
+                doc_id_val = str(row.get('Document_ID', '')).strip()
+                b_naam_val = str(row.get('Bestandsnaam', '')).strip()
+                
+                if (doc_id_val and doc_id_val.lower() in onderzoeksvraag.lower()) or \
+                   (b_naam_val and b_naam_val.lower() in onderzoeksvraag.lower()):
+                    if doc_id_val and doc_id_val not in geselecteerde_doc_ids:
+                        geselecteerde_doc_ids.append(doc_id_val)
 
-            if specifieke_zoekwoorden:
+            # Zoek via Gemini naar relevante Document_ID's als er geen directe match was
+            if not geselecteerde_doc_ids:
+                dossier_samenvattingen = {}
                 for row in data:
                     doc_id = str(row.get('Document_ID', '')).strip()
-                    b_naam = str(row.get('Bestandsnaam', '')).strip()
-                    rij_tekst = " ".join([str(v) for v in row.values()]).lower()
+                    if not doc_id:
+                        doc_id = f"SINGLE_{row.get('Bestandsnaam', '').strip()}"
+
+                    if doc_id not in dossier_samenvattingen:
+                        dossier_samenvattingen[doc_id] = {
+                            "Datum": row.get('Datum Document', 'Onbekend'),
+                            "Personen": set(),
+                            "Onderwerpen": set(),
+                            "Paginas": 0
+                        }
                     
-                    key_id = doc_id if doc_id else b_naam
+                    dossier_samenvattingen[doc_id]["Paginas"] += 1
+                    if row.get('Genoemde Personen'):
+                        dossier_samenvattingen[doc_id]["Personen"].add(str(row.get('Genoemde Personen')))
+                    if row.get('Onderwerp (NL)'):
+                        dossier_samenvattingen[doc_id]["Onderwerpen"].add(str(row.get('Onderwerp (NL)')))
 
-                    for w in specifieke_zoekwoorden:
-                        if w in rij_tekst:
-                            if key_id and key_id not in geselecteerde_keys:
-                                geselecteerde_keys.append(key_id)
-                            break
+                index_regels = []
+                for d_id, d_info in dossier_samenvattingen.items():
+                    pers_str = ", ".join(d_info["Personen"]) if d_info["Personen"] else "Geen"
+                    ond_str = ", ".join(d_info["Onderwerpen"]) if d_info["Onderwerpen"] else "Geen"
+                    regel = f"Document_ID: {d_id} | Datum: {d_info['Datum']} | Personen: {pers_str} | Onderwerp: {ond_str} | Pagina's: {d_info['Paginas']}"
+                    index_regels.append(regel)
 
-            # B. GEMINI INDEX SCANNING
-            dossier_samenvattingen = {}
-            for row in data:
-                doc_id = str(row.get('Document_ID', '')).strip()
-                b_naam = str(row.get('Bestandsnaam', '')).strip()
-                key_id = doc_id if doc_id else b_naam
+                index_tekst = "\n".join(index_regels)
+                if len(index_tekst) > 250000:
+                    index_tekst = index_tekst[:250000]
 
-                if key_id not in dossier_samenvattingen:
-                    dossier_samenvattingen[key_id] = {
-                        "Bestanden": set(),
-                        "Datum": row.get('Datum Document', 'Onbekend'),
-                        "Personen": set(),
-                        "Onderwerpen": set(),
-                    }
-                
-                dossier_samenvattingen[key_id]["Bestanden"].add(b_naam)
-                if row.get('Genoemde Personen'):
-                    dossier_samenvattingen[key_id]["Personen"].add(str(row.get('Genoemde Personen')))
-                if row.get('Onderwerp (NL)'):
-                    dossier_samenvattingen[key_id]["Onderwerpen"].add(str(row.get('Onderwerp (NL)')))
-
-            index_regels = []
-            for d_id, d_info in dossier_samenvattingen.items():
-                pers_str = ", ".join(d_info["Personen"]) if d_info["Personen"] else "Geen"
-                ond_str = ", ".join(d_info["Onderwerpen"]) if d_info["Onderwerpen"] else "Geen"
-                best_str = ", ".join(list(d_info["Bestanden"]))
-                
-                regel = f"ID/Dossier: {d_id} | Bestanden in dossier: {best_str} | Onderwerp: {ond_str} | Personen: {pers_str}"
-                index_regels.append(regel)
-
-            index_tekst = "\n".join(index_regels)
-            if len(index_tekst) > 250000:
-                index_tekst = index_tekst[:250000]
-
-            filter_prompt = f"""
-Jij bent hoofdarchivaris. Hieronder staat de index van alle dossiers (zoals DOC_0205) en losse bestanden in ons archief:
+                filter_prompt = f"""
+Jij bent hoofdarchivaris. Hieronder staat een overzicht van de unieke dossiers (Document_ID's) in ons archief:
 
 {index_tekst}
 
 ONDERZOEKSVRAAG: "{onderzoeksvraag}"
 
-INSTRUCTIES VOOR SELECTIE:
-1. Selecteer UITSLUITEND de ID's / Dossiernamen / Bestandsnamen die exact aansluiten op het specifieke model of onderwerp in de vraag.
-2. Wees extreem strikt: negeer algemene bestanden die toevallig alleen de woorden 'radio' of 'record' bevatten.
-3. Geef maximaal {max_dossiers} ID's terug.
+INSTRUCTIES:
+1. Welke dossiers (Document_ID's) uit het overzicht zijn het meest relevant voor deze specifieke vraag?
+2. Let goed op PERSONEN, ONDERWERP en DATUM/PERIODE.
+3. Geef maximaal {max_dossiers} meest relevante Document_ID's terug.
 
-Geef UITSLUITEND de exacte ID's/Dossiers/Bestandsnamen terug gescheiden door komma's. Geen extra tekst of uitleg.
+Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's. Geen extra tekst of uitleg.
 """
 
-            try:
-                res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
-                ai_ids = [d.strip() for d in res_filter.text.split(',') if d.strip()]
-                
-                for ai_id in ai_ids:
-                    if ai_id not in geselecteerde_keys:
-                        geselecteerde_keys.append(ai_id)
-            except Exception as e:
-                st.error(f"Fout tijdens het scannen van de index ({MODEL_NAAM}): {e}")
+                try:
+                    res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
+                    geselecteerde_doc_ids = [d.strip() for d in res_filter.text.split(',') if d.strip()]
+                except Exception as e:
+                    st.error(f"Fout tijdens het scannen van de index ({MODEL_NAAM}): {e}")
+                    if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                        st.info("💡 De API is momenteel druk bezet. Wacht circa 30 seconden en probeer het nogmaals.")
+                    st.stop()
 
-        if not geselecteerde_keys:
+        if not geselecteerde_doc_ids:
             st.warning("Geen relevante documenten gevonden op basis van de zoekopdracht.")
             st.stop()
 
-        # BEPERK HET AANTAL KEYS
-        geselecteerde_keys = geselecteerde_keys[:max_dossiers]
-        
-        # VERZAMEL DE BIJBEHORENDE ECHTE BESTANDSNAMEN
+        # STAP 1.5: Verzamel ALLE bestanden die bij de geselecteerde Document_ID's horen
         eind_bestanden_lijst = []
         for row in data:
             doc_id = str(row.get('Document_ID', '')).strip()
             b_naam = str(row.get('Bestandsnaam', '')).strip()
-            
-            match = False
-            for key in geselecteerde_keys:
-                # Oplossing: opschonen van eventuele SINGLE_ prefixes uit de geselecteerde sleutel
-                clean_key = key.lower()
-                if clean_key.startswith('single_'):
-                    clean_key = clean_key.replace('single_', '', 1)
 
-                if (doc_id and doc_id.lower() == clean_key) or \
-                   (b_naam and b_naam.lower() == clean_key) or \
-                   (doc_id and doc_id.lower() == key.lower()):
-                    match = True
-                    break
-            
-            if match and b_naam and b_naam not in eind_bestanden_lijst:
-                eind_bestanden_lijst.append(b_naam)
-
-        eind_bestanden_lijst = eind_bestanden_lijst[:max_dossiers]
+            if any(doc_id.lower() == g_id.lower() or b_naam.lower() == g_id.lower() for g_id in geselecteerde_doc_ids):
+                if b_naam and b_naam not in eind_bestanden_lijst:
+                    eind_bestanden_lijst.append(b_naam)
 
         # STAP 2: Originele documenten ophalen uit Google Drive
-        with st.spinner(f"Stap 2/3: Originele bestanden ophalen uit Drive ({len(eind_bestanden_lijst)} bestanden verzameld)..."):
+        with st.spinner(f"Stap 2/3: Originele bestanden ophalen uit Drive ({len(eind_bestanden_lijst)} pagina's/bestanden verzameld)..."):
             onderzoeks_payload = [
                 f"""Jij bent een financieel-historisch expert en archivaris.
-Beantwoord onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de meegeleverde originele archiefstukken (afbeeldingen EN PDF's).
+Beantwoord onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de meegeleverde originele archiefstukken.
 
 ONDERZOEKSVRAAG: {onderzoeksvraag}
 
 INSTRUCTIES VOOR JE RAPPORT:
-1. Beantwoord de vraag op basis van de geleverde bestanden.
-2. Vermeld alle concrete namen, specificaties, type-nummers, jaartallen en details die je vindt.
-3. Citeer steeds de exacte bestandsnaam als bron.
-4. Trek een duidelijke conclusie.
+1. Richt je specifiek op de gevraagde firma, personen en periode.
+2. Structureer je antwoord helder.
+3. Vermeld alle concrete namen, functies, cijfers en details die op de documenten staan.
+4. Citeer steeds de bestandsnaam (bijv. 'document.pdf' of 'foto.jpg') wanneer je naar specifieke informatie verwijst.
+5. Trek een heldere conclusie als antwoord op de vraag.
 """
             ]
 
@@ -295,11 +276,7 @@ INSTRUCTIES VOOR JE RAPPORT:
                     st.warning("Onderzoek geannuleerd bij het ophalen van bestanden.")
                     st.stop()
 
-                # Extra check om SINGLE_ op te schonen indien het in de bestandsnaam zelf zou sluipen
                 b_naam_schoon = b_naam.strip("'\" ")
-                if b_naam_schoon.lower().startswith("single_"):
-                    b_naam_schoon = b_naam_schoon[7:]
-
                 if ":" in b_naam_schoon:
                     b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
                 
@@ -384,34 +361,26 @@ INSTRUCTIES VOOR JE RAPPORT:
                 st.session_state.chat_historie.append(("assistant", analyse_response.text))
             except Exception as e:
                 st.error(f"Fout tijdens Gemini analyse: {e}")
+                st.info("💡 Tip: Probeer 'Max dossiers' te verlagen naar bijv. 5 dossiers om binnen de limieten te blijven.")
 
 # ------------------------------------------------------------------------------
 # 5. WEERGAVE BRONNEN MET PREVIEWS & RAPPORT
 # ------------------------------------------------------------------------------
 if st.session_state.bron_details:
-    st.subheader("📁 Geselecteerde bronnen & Documenten:")
+    st.subheader("📁 Geselecteerde bronnen & Afbeeldingen:")
     
     cols = st.columns(3)
     for index, bron in enumerate(st.session_state.bron_details):
         b_naam = bron["naam"]
         b_id = bron["id"]
-        b_mime = bron.get("mime", "")
         
         thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w800"
         drive_view_url = f"https://drive.google.com/file/d/{b_id}/view"
 
         with cols[index % 3]:
             with st.expander(f"📄 {b_naam}", expanded=True):
-                if b_mime == 'application/pdf' or b_naam.lower().endswith('.pdf'):
-                    st.info("📕 **PDF Document**")
-                    try:
-                        st.image(thumbnail_url, caption=b_naam, use_container_width=True)
-                    except Exception:
-                        st.write("*(Geen voorbeeldweergave beschikbaar voor deze PDF)*")
-                else:
-                    st.image(thumbnail_url, caption=b_naam, use_container_width=True)
-                
-                st.link_button("🔍 Open origineel in Google Drive", drive_view_url)
+                st.image(thumbnail_url, caption=b_naam, use_container_width=True)
+                st.link_button("🔍 Open in hoge resolutie", drive_view_url)
 
 if st.session_state.chat_historie:
     st.divider()
@@ -421,6 +390,7 @@ if st.session_state.chat_historie:
         with st.chat_message(rol):
             st.write(tekst)
 
+    # Vervolgvragen stellen
     if vervolgvraag := st.chat_input("Stel een vervolgvraag over dit rapport..."):
         st.session_state.chat_historie.append(("user", vervolgvraag))
         with st.chat_message("user"):

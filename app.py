@@ -158,13 +158,12 @@ if submit_button:
 
             geselecteerde_keys = []
 
-            # A. GEFILTERDE HARD-CHECK: Filter generieke termen uit (zoals radio, record, royal, model)
+            # A. HARD-CHECK OP SPECIFIEKE TREFWOORDEN
             generieke_woorden = {
                 'radio', 'radios', 'record', 'royal', 'rbc', 'model', 'modellen', 
                 'over', 'weet', 'geef', 'welke', 'document', 'dossier', 'het', 'een', 'van'
             }
             
-            # Houd alleen specifieke zoekwoorden over (zoals 'vedette')
             specifieke_zoekwoorden = [
                 w.lower() for w in onderzoeksvraag.split() 
                 if len(w) > 3 and w.lower() not in generieke_woorden
@@ -184,7 +183,7 @@ if submit_button:
                                 geselecteerde_keys.append(key_id)
                             break
 
-            # B. GEMINI INDEX SCANNING (Als aanvulling)
+            # B. GEMINI INDEX SCANNING
             dossier_samenvattingen = {}
             for row in data:
                 doc_id = str(row.get('Document_ID', '')).strip()
@@ -219,14 +218,14 @@ if submit_button:
                 index_tekst = index_tekst[:250000]
 
             filter_prompt = f"""
-Jij bent hoofdarchivaris. Hieronder staat de index van alle dossiers (zoals DOC_0205) en losse bestanden (PDF/JPG) in ons archief:
+Jij bent hoofdarchivaris. Hieronder staat de index van alle dossiers (zoals DOC_0205) en losse bestanden in ons archief:
 
 {index_tekst}
 
 ONDERZOEKSVRAAG: "{onderzoeksvraag}"
 
 INSTRUCTIES VOOR SELECTIE:
-1. Selecteer UITSLEUTEND de ID's / Dossiernamen / Bestandsnamen die exact aansluiten op het specifieke model of onderwerp in de vraag.
+1. Selecteer UITSLUITEND de ID's / Dossiernamen / Bestandsnamen die exact aansluiten op het specifieke model of onderwerp in de vraag.
 2. Wees extreem strikt: negeer algemene bestanden die toevallig alleen de woorden 'radio' of 'record' bevatten.
 3. Geef maximaal {max_dossiers} ID's terug.
 
@@ -250,7 +249,7 @@ Geef UITSLUITEND de exacte ID's/Dossiers/Bestandsnamen terug gescheiden door kom
         # BEPERK HET AANTAL KEYS
         geselecteerde_keys = geselecteerde_keys[:max_dossiers]
         
-        # VERZAMEL DE BIJBEHORENDE BESTANDSNAMEN
+        # VERZAMEL DE BIJBEHORENDE ECHTE BESTANDSNAMEN
         eind_bestanden_lijst = []
         for row in data:
             doc_id = str(row.get('Document_ID', '')).strip()
@@ -258,16 +257,20 @@ Geef UITSLUITEND de exacte ID's/Dossiers/Bestandsnamen terug gescheiden door kom
             
             match = False
             for key in geselecteerde_keys:
-                if (doc_id and doc_id.lower() == key.lower()) or \
-                   (b_naam and b_naam.lower() == key.lower()) or \
-                   (key.lower().startswith('single_') and key.lower().replace('single_', '') == b_naam.lower()):
+                # Oplossing: opschonen van eventuele SINGLE_ prefixes uit de geselecteerde sleutel
+                clean_key = key.lower()
+                if clean_key.startswith('single_'):
+                    clean_key = clean_key.replace('single_', '', 1)
+
+                if (doc_id and doc_id.lower() == clean_key) or \
+                   (b_naam and b_naam.lower() == clean_key) or \
+                   (doc_id and doc_id.lower() == key.lower()):
                     match = True
                     break
             
             if match and b_naam and b_naam not in eind_bestanden_lijst:
                 eind_bestanden_lijst.append(b_naam)
 
-        # HET TOTALE AANTAL BESTANDEN BEPERKEN TOT HET SLIDER MAXIMUM
         eind_bestanden_lijst = eind_bestanden_lijst[:max_dossiers]
 
         # STAP 2: Originele documenten ophalen uit Google Drive
@@ -292,7 +295,11 @@ INSTRUCTIES VOOR JE RAPPORT:
                     st.warning("Onderzoek geannuleerd bij het ophalen van bestanden.")
                     st.stop()
 
+                # Extra check om SINGLE_ op te schonen indien het in de bestandsnaam zelf zou sluipen
                 b_naam_schoon = b_naam.strip("'\" ")
+                if b_naam_schoon.lower().startswith("single_"):
+                    b_naam_schoon = b_naam_schoon[7:]
+
                 if ":" in b_naam_schoon:
                     b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
                 

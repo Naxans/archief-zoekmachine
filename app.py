@@ -156,28 +156,35 @@ if submit_button:
             if st.session_state.gestopt:
                 st.stop()
 
-            geselecteerde_keys = []  # Dit kan een Document_ID (bijv DOC_0205) óf een Bestandsnaam zijn
+            geselecteerde_keys = []
 
-            # A. HARD-CHECK op specifieke zoekwoorden (zoals 'vedette')
-            zoek_woorden = [w.lower() for w in onderzoeksvraag.split() if len(w) > 3]
-            negeer_woorden = ['radio', 'model', 'over', 'weet', 'geef', 'welke', 'document', 'dossier']
+            # A. GEFILTERDE HARD-CHECK: Filter generieke termen uit (zoals radio, record, royal, model)
+            generieke_woorden = {
+                'radio', 'radios', 'record', 'royal', 'rbc', 'model', 'modellen', 
+                'over', 'weet', 'geef', 'welke', 'document', 'dossier', 'het', 'een', 'van'
+            }
+            
+            # Houd alleen specifieke zoekwoorden over (zoals 'vedette')
+            specifieke_zoekwoorden = [
+                w.lower() for w in onderzoeksvraag.split() 
+                if len(w) > 3 and w.lower() not in generieke_woorden
+            ]
 
-            for row in data:
-                doc_id = str(row.get('Document_ID', '')).strip()
-                b_naam = str(row.get('Bestandsnaam', '')).strip()
-                rij_tekst = " ".join([str(v) for v in row.values()]).lower()
-                
-                # Bepaal sleutel (gebruik Document_ID als die bestaat, anders Bestandsnaam)
-                key_id = doc_id if doc_id else b_naam
+            if specifieke_zoekwoorden:
+                for row in data:
+                    doc_id = str(row.get('Document_ID', '')).strip()
+                    b_naam = str(row.get('Bestandsnaam', '')).strip()
+                    rij_tekst = " ".join([str(v) for v in row.values()]).lower()
+                    
+                    key_id = doc_id if doc_id else b_naam
 
-                for w in zoek_woorden:
-                    if w in rij_tekst and w not in negeer_woorden:
-                        if key_id and key_id not in geselecteerde_keys:
-                            geselecteerde_keys.append(key_id)
-                        break
+                    for w in specifieke_zoekwoorden:
+                        if w in rij_tekst:
+                            if key_id and key_id not in geselecteerde_keys:
+                                geselecteerde_keys.append(key_id)
+                            break
 
-            # B. GEMINI INDEX SCANNING
-            # Groepeer gegevens per Document_ID of los bestand
+            # B. GEMINI INDEX SCANNING (Als aanvulling)
             dossier_samenvattingen = {}
             for row in data:
                 doc_id = str(row.get('Document_ID', '')).strip()
@@ -219,10 +226,9 @@ Jij bent hoofdarchivaris. Hieronder staat de index van alle dossiers (zoals DOC_
 ONDERZOEKSVRAAG: "{onderzoeksvraag}"
 
 INSTRUCTIES VOOR SELECTIE:
-1. Selecteer de ID's / Dossiernamen / Bestandsnamen die direct inhoudelijk aansluiten op de vraag.
-2. Selecteer expliciet (PDF-)bestanden of documenten waarin de specifieke type- of modelnaam uit de vraag voorkomt.
-3. Sluit algemene radiodistributiedossiers, schadeclaims of bestuurderslijsten (zoals Kempische Radio Centrales) UIT, behalve als er specifiek naar gevraagd wordt.
-4. Geef maximaal {max_dossiers} ID's terug.
+1. Selecteer UITSLEUTEND de ID's / Dossiernamen / Bestandsnamen die exact aansluiten op het specifieke model of onderwerp in de vraag.
+2. Wees extreem strikt: negeer algemene bestanden die toevallig alleen de woorden 'radio' of 'record' bevatten.
+3. Geef maximaal {max_dossiers} ID's terug.
 
 Geef UITSLUITEND de exacte ID's/Dossiers/Bestandsnamen terug gescheiden door komma's. Geen extra tekst of uitleg.
 """
@@ -241,15 +247,15 @@ Geef UITSLUITEND de exacte ID's/Dossiers/Bestandsnamen terug gescheiden door kom
             st.warning("Geen relevante documenten gevonden op basis van de zoekopdracht.")
             st.stop()
 
-        # BEPERK TOT HET INGESTELDE MAXIMUM EN VERZAMEL ALLE GERELATEERDE BESTANDEN
+        # BEPERK HET AANTAL KEYS
         geselecteerde_keys = geselecteerde_keys[:max_dossiers]
         
+        # VERZAMEL DE BIJBEHORENDE BESTANDSNAMEN
         eind_bestanden_lijst = []
         for row in data:
             doc_id = str(row.get('Document_ID', '')).strip()
             b_naam = str(row.get('Bestandsnaam', '')).strip()
             
-            # Check of het bestand hoort bij een geselecteerd Document_ID óf direct matchet met een bestandsnaam
             match = False
             for key in geselecteerde_keys:
                 if (doc_id and doc_id.lower() == key.lower()) or \
@@ -261,8 +267,11 @@ Geef UITSLUITEND de exacte ID's/Dossiers/Bestandsnamen terug gescheiden door kom
             if match and b_naam and b_naam not in eind_bestanden_lijst:
                 eind_bestanden_lijst.append(b_naam)
 
+        # HET TOTALE AANTAL BESTANDEN BEPERKEN TOT HET SLIDER MAXIMUM
+        eind_bestanden_lijst = eind_bestanden_lijst[:max_dossiers]
+
         # STAP 2: Originele documenten ophalen uit Google Drive
-        with st.spinner(f"Stap 2/3: Originele bestanden ophalen uit Drive ({len(eind_bestanden_lijst)} pagina's/bestanden verzameld)..."):
+        with st.spinner(f"Stap 2/3: Originele bestanden ophalen uit Drive ({len(eind_bestanden_lijst)} bestanden verzameld)..."):
             onderzoeks_payload = [
                 f"""Jij bent een financieel-historisch expert en archivaris.
 Beantwoord onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de meegeleverde originele archiefstukken (afbeeldingen EN PDF's).
@@ -272,7 +281,7 @@ ONDERZOEKSVRAAG: {onderzoeksvraag}
 INSTRUCTIES VOOR JE RAPPORT:
 1. Beantwoord de vraag op basis van de geleverde bestanden.
 2. Vermeld alle concrete namen, specificaties, type-nummers, jaartallen en details die je vindt.
-3. Citeer steeds de exacte bestandsnaam (bijv. 'document.pdf' of 'foto.jpg') als bron.
+3. Citeer steeds de exacte bestandsnaam als bron.
 4. Trek een duidelijke conclusie.
 """
             ]

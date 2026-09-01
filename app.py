@@ -46,14 +46,7 @@ DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
 def bepaal_werkend_model(client):
-    """
-    Vraagt actieve modellen op bij Google en test welke daadwerkelijk werkt.
-    
-    ONDERHOUDSTIP:
-    Als Google een nieuw hoofdmodel uitbrengt (bijv. 'gemini-3.0-flash'), 
-    zet deze naam dan BOVENAAN in het onderstaande lijstje 'kandidaten' 
-    om het de eerste keus te maken.
-    """
+    """Vraagt actieve modellen op bij Google en test welke daadwerkelijk werkt."""
     kandidaten = [
         'gemini-2.0-flash',
         'gemini-2.0-flash-lite',

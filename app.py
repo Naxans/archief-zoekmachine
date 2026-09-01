@@ -46,14 +46,6 @@ DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
 def bepaal_werkend_model(client):
-    """
-    Vraagt actieve modellen op bij Google en test welke daadwerkelijk werkt.
-    
-    ONDERHOUDSTIP:
-    Als Google een nieuw hoofdmodel uitbrengt (bijv. 'gemini-3.0-flash'), 
-    zet deze naam dan BOVENAAN in het onderstaande lijstje 'kandidaten' 
-    om het de eerste keus te maken.
-    """
     kandidaten = [
         'gemini-2.0-flash',
         'gemini-2.0-flash-lite',
@@ -120,11 +112,11 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: Geef me de bestuursleden van de firma "Radio Belge de Construction" in het jaar 1935',
+        placeholder='Bijv: wat weet je over de royal record radio model vedette?',
         height=100
     )
 with col2:
-    max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=15, step=5)
+    max_dossiers = st.slider("Max dossiers / bestanden:", min_value=5, max_value=50, value=15, step=5)
 
 # Knoppenbalk met Actie- en Stop-knoppen
 btn_col1, btn_col2 = st.columns([2, 1])
@@ -172,7 +164,7 @@ if submit_button:
 
             geselecteerde_doc_ids = []
 
-            # Directe match op Document_ID of Bestandsnaam in zoekopdracht
+            # A. Directe match op Document_ID of Bestandsnaam in zoekopdracht
             for row in data:
                 doc_id_val = str(row.get('Document_ID', '')).strip()
                 b_naam_val = str(row.get('Bestandsnaam', '')).strip()
@@ -182,19 +174,22 @@ if submit_button:
                     if doc_id_val and doc_id_val not in geselecteerde_doc_ids:
                         geselecteerde_doc_ids.append(doc_id_val)
 
-            # Zoek via Gemini naar relevante Document_ID's als er geen directe match was
+            # B. Zoek via Gemini naar relevante Document_ID's als er geen directe match was
             if not geselecteerde_doc_ids:
                 dossier_samenvattingen = {}
                 for row in data:
                     doc_id = str(row.get('Document_ID', '')).strip()
+                    b_naam = str(row.get('Bestandsnaam', '')).strip()
+                    
                     if not doc_id:
-                        doc_id = f"SINGLE_{row.get('Bestandsnaam', '').strip()}"
+                        doc_id = f"SINGLE_{b_naam}"
 
                     if doc_id not in dossier_samenvattingen:
                         dossier_samenvattingen[doc_id] = {
                             "Datum": row.get('Datum Document', 'Onbekend'),
                             "Personen": set(),
                             "Onderwerpen": set(),
+                            "Inhoud": set(),  # <-- Inhoud & cijfers veld
                             "Paginas": 0
                         }
                     
@@ -203,12 +198,16 @@ if submit_button:
                         dossier_samenvattingen[doc_id]["Personen"].add(str(row.get('Genoemde Personen')))
                     if row.get('Onderwerp (NL)'):
                         dossier_samenvattingen[doc_id]["Onderwerpen"].add(str(row.get('Onderwerp (NL)')))
+                    if row.get('Inhoud & cijfers (NL)'):
+                        dossier_samenvattingen[doc_id]["Inhoud"].add(str(row.get('Inhoud & cijfers (NL)')))
 
                 index_regels = []
                 for d_id, d_info in dossier_samenvattingen.items():
                     pers_str = ", ".join(d_info["Personen"]) if d_info["Personen"] else "Geen"
                     ond_str = ", ".join(d_info["Onderwerpen"]) if d_info["Onderwerpen"] else "Geen"
-                    regel = f"Document_ID: {d_id} | Datum: {d_info['Datum']} | Personen: {pers_str} | Onderwerp: {ond_str} | Pagina's: {d_info['Paginas']}"
+                    inhoud_str = " | ".join(d_info["Inhoud"]) if d_info["Inhoud"] else "Geen"
+                    
+                    regel = f"Document_ID: {d_id} | Datum: {d_info['Datum']} | Personen: {pers_str} | Onderwerp: {ond_str} | Inhoud & Cijfers: {inhoud_str}"
                     index_regels.append(regel)
 
                 index_tekst = "\n".join(index_regels)
@@ -216,15 +215,15 @@ if submit_button:
                     index_tekst = index_tekst[:250000]
 
                 filter_prompt = f"""
-Jij bent hoofdarchivaris. Hieronder staat een overzicht van de unieke dossiers (Document_ID's) in ons archief:
+Jij bent hoofdarchivaris. Hieronder staat een overzicht van de unieke dossiers (Document_ID's) en bestanden in ons archief, inclusief hun specifieke inhoud:
 
 {index_tekst}
 
 ONDERZOEKSVRAAG: "{onderzoeksvraag}"
 
 INSTRUCTIES:
-1. Welke dossiers (Document_ID's) uit het overzicht zijn het meest relevant voor deze specifieke vraag?
-2. Let goed op PERSONEN, ONDERWERP en DATUM/PERIODE.
+1. Welke dossiers of bestanden (Document_ID's) uit het overzicht zijn het meest relevant voor deze vraag?
+2. Let heel goed op INHOUD & CIJFERS, PERSONEN, ONDERWERP en SPECIFIEKE MERKNAMEN/MODELLEN in de tekst.
 3. Geef maximaal {max_dossiers} meest relevante Document_ID's terug.
 
 Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's. Geen extra tekst of uitleg.
@@ -249,12 +248,30 @@ Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's. Geen ext
             doc_id = str(row.get('Document_ID', '')).strip()
             b_naam = str(row.get('Bestandsnaam', '')).strip()
 
-            if any(doc_id.lower() == g_id.lower() or b_naam.lower() == g_id.lower() for g_id in geselecteerde_doc_ids):
-                if b_naam and b_naam not in eind_bestanden_lijst:
+            for g_id in geselecteerde_doc_ids:
+                clean_gid = g_id
+                if clean_gid.startswith("SINGLE_"):
+                    clean_gid = clean_gid.replace("SINGLE_", "", 1)
+                
+                is_match = False
+                if doc_id and doc_id.lower() == g_id.lower():
+                    is_match = True
+                elif b_naam and b_naam.lower() == g_id.lower():
+                    is_match = True
+                elif b_naam and b_naam.lower() == clean_gid.lower():
+                    is_match = True
+
+                if is_match and b_naam and b_naam not in eind_bestanden_lijst:
                     eind_bestanden_lijst.append(b_naam)
 
+        eind_bestanden_lijst = eind_bestanden_lijst[:max_dossiers]
+
+        if not eind_bestanden_lijst:
+            st.warning("Er konden geen bijbehorende bestanden uit de tabel worden gekoppeld.")
+            st.stop()
+
         # STAP 2: Originele documenten ophalen uit Google Drive
-        with st.spinner(f"Stap 2/3: Originele bestanden ophalen uit Drive ({len(eind_bestanden_lijst)} pagina's/bestanden verzameld)..."):
+        with st.spinner(f"Stap 2/3: Originele bestanden ophalen uit Drive ({len(eind_bestanden_lijst)} bestanden verzameld)..."):
             onderzoeks_payload = [
                 f"""Jij bent een financieel-historisch expert en archivaris.
 Beantwoord onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de meegeleverde originele archiefstukken.
@@ -262,9 +279,9 @@ Beantwoord onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de
 ONDERZOEKSVRAAG: {onderzoeksvraag}
 
 INSTRUCTIES VOOR JE RAPPORT:
-1. Richt je specifiek op de gevraagde firma, personen en periode.
+1. Richt je specifiek op de gevraagde firma, personen, modellen en periode.
 2. Structureer je antwoord helder.
-3. Vermeld alle concrete namen, functies, cijfers en details die op de documenten staan.
+3. Vermeld alle concrete namen, functies, cijfers, modelnamen en details die op de documenten staan.
 4. Citeer steeds de bestandsnaam (bijv. 'document.pdf' of 'foto.jpg') wanneer je naar specifieke informatie verwijst.
 5. Trek een heldere conclusie als antwoord op de vraag.
 """
@@ -277,13 +294,18 @@ INSTRUCTIES VOOR JE RAPPORT:
                     st.stop()
 
                 b_naam_schoon = b_naam.strip("'\" ")
+                if b_naam_schoon.startswith("SINGLE_"):
+                    b_naam_schoon = b_naam_schoon.replace("SINGLE_", "", 1)
+
                 if ":" in b_naam_schoon:
                     b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
                 
+                # Probeer exacte naam
                 query = f"name = '{b_naam_schoon}' and trashed = false"
                 res = drive_service.files().list(q=query, fields='files(id, name, mimeType)').execute()
                 bestanden = res.get('files', [])
 
+                # Flexibele zoekopdracht als exacte naam mislukt
                 if not bestanden:
                     schoon_zonder_ext = b_naam_schoon.replace('.jpg', '').replace('.JPG', '').replace('.jpeg', '').replace('.png', '').replace('.pdf', '')
                     query_flexibel = f"name contains '{schoon_zonder_ext}' and trashed = false"

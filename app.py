@@ -40,18 +40,27 @@ except Exception as e:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 2. CONFIGURATIE & DYNAMISCHE MODEL-DETECTIE (OPLOSSING 2)
+# 2. CONFIGURATIE & DYNAMISCHE MODEL-DETECTIE
 # ------------------------------------------------------------------------------
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
 def bepaal_werkend_model(client):
-    """Test aliassen die ondersteund worden door jouw API-sleutel.
-    Probeert eerst gemini-flash-lite-latest vanwege ruimere gratis limieten."""
+    """Vraagt actieve modellen op bij Google en test welke daadwerkelijk werkt."""
     kandidaten = [
-        'gemini-flash-lite-latest',
-        'gemini-flash-latest'
+        'gemini-2.0-flash',
+        'gemini-2.0-flash-lite',
+        'gemini-1.5-flash-002',
+        'gemini-1.5-pro-002'
     ]
+    
+    try:
+        voorradig = [m.name.replace("models/", "") for m in client.models.list()]
+        for m in voorradig:
+            if m not in kandidaten and 'gemini' in m:
+                kandidaten.append(m)
+    except Exception:
+        pass
 
     for model_naam in kandidaten:
         try:
@@ -60,12 +69,12 @@ def bepaal_werkend_model(client):
         except Exception:
             continue
 
-    return 'gemini-flash-latest'
+    return None
 
 MODEL_NAAM = bepaal_werkend_model(ai_client)
 
-def genereer_met_retry(client, model, contents, max_retries=4):
-    """Voert een API-call uit en wacht automatisch als de TPM/RPM limiet (429) bereikt wordt."""
+def genereer_met_retry(client, model, contents, max_retries=3):
+    """Voert een API-call uit en wacht automatisch als de TPM-limiet (429) bereikt wordt."""
     for poging in range(max_retries):
         try:
             return client.models.generate_content(model=model, contents=contents)
@@ -73,11 +82,8 @@ def genereer_met_retry(client, model, contents, max_retries=4):
             err_msg = str(e)
             if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
                 if poging < max_retries - 1:
-                    st.info(f"⏳ API-limiet bereikt. De applicatie pauzeert 22 seconden voor poging {poging + 2}/{max_retries}...")
-                    time.sleep(22)
+                    time.sleep(12)
                     continue
-                else:
-                    st.error("⚠️ De limiet voor de gratis Gemini API-sleutel is bereikt. Wacht 1 à 2 minuten en probeer het opnieuw.")
             raise e
 
 # Session state variabelen
@@ -192,12 +198,11 @@ if submit_button:
                     if row.get('Onderwerp (NL)'):
                         dossier_samenvattingen[doc_id]["Onderwerpen"].add(str(row.get('Onderwerp (NL)')).strip())
                     
-                    # Flexible en robuuste uitlezing van de Inhoudskolom (hoofdletter-onafhankelijk)
+                    # Flexible uitlezing van de Inhoudskolom
                     inhoud_val = (
                         row.get('Inhoud & Cijfers (NL)') or 
-                        row.get('Inhoud & cijfers (NL)') or 
                         row.get('Inhoud & Cijfers') or 
-                        row.get('Inhoud & cijfers') or 
+                        row.get('Inhoud (NL)') or 
                         row.get('Inhoud') or 
                         ''
                     )
@@ -238,6 +243,8 @@ Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's. Geen ext
                     geselecteerde_doc_ids = [d.strip() for d in res_filter.text.split(',') if d.strip()]
                 except Exception as e:
                     st.error(f"Fout tijdens het scannen van de index ({MODEL_NAAM}): {e}")
+                    if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                        st.info("💡 De API is momenteel druk bezet. Wacht circa 30 seconden en probeer het nogmaals.")
                     st.stop()
 
         if not geselecteerde_doc_ids:
@@ -254,7 +261,7 @@ Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's. Geen ext
                 if b_naam and b_naam not in eind_bestanden_lijst:
                     eind_bestanden_lijst.append(b_naam)
 
-        # STAP 2: Originele documenten ophalen uit Google Drive
+        # STAP 2: Originele documenten ophalen uit Google Drive (Met flexibele zoekfunctie)
         with st.spinner(f"Stap 2/3: Originele bestanden ophalen uit Drive ({len(eind_bestanden_lijst)} pagina's/bestanden verzameld)..."):
             onderzoeks_payload = [
                 f"""Jij bent een financieel-historisch expert en archivaris.
@@ -281,12 +288,12 @@ INSTRUCTIES VOOR JE RAPPORT:
                 if ":" in b_naam_schoon:
                     b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
                 
-                # 1. Exacte bestandsnaam zoeken
+                # 1. Probeer een exacte bestandsnaam match
                 query = f"name = '{b_naam_schoon}' and trashed = false"
                 res = drive_service.files().list(q=query, fields='files(id, name, mimeType)').execute()
                 bestanden = res.get('files', [])
 
-                # 2. Flexibel zoeken zonder extensie als optie 1 leeg is
+                # 2. Probeer een flexibelere match zonder extensie
                 if not bestanden:
                     schoon_zonder_ext = b_naam_schoon.rsplit('.', 1)[0]
                     query_flexibel = f"name contains '{schoon_zonder_ext}' and trashed = false"
@@ -360,10 +367,11 @@ INSTRUCTIES VOOR JE RAPPORT:
 
             try:
                 st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
-                analyse_response = genereer_met_retry(ai_client, MODEL_NAAM, onderzoeks_payload)
+                analyse_response = st.session_state.actieve_chat.send_message(onderzoeks_payload)
                 st.session_state.chat_historie.append(("assistant", analyse_response.text))
             except Exception as e:
                 st.error(f"Fout tijdens Gemini analyse: {e}")
+                st.info("💡 Tip: Probeer 'Max dossiers' te verlagen naar bijv. 5 dossiers om binnen de limieten te blijven.")
 
 # ------------------------------------------------------------------------------
 # 5. WEERGAVE BRONNEN MET PREVIEWS & RAPPORT

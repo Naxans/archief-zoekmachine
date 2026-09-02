@@ -40,27 +40,18 @@ except Exception as e:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 2. CONFIGURATIE & DYNAMISCHE MODEL-DETECTIE
+# 2. CONFIGURATIE & DYNAMISCHE MODEL-DETECTIE (OPLOSSING 2)
 # ------------------------------------------------------------------------------
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
 def bepaal_werkend_model(client):
-    """Vraagt actieve modellen op bij Google en test welke daadwerkelijk werkt."""
+    """Test aliassen die ondersteund worden door jouw API-sleutel.
+    Probeert eerst gemini-flash-lite-latest vanwege ruimere gratis limieten."""
     kandidaten = [
-        'gemini-2.0-flash',
-        'gemini-2.0-flash-lite',
-        'gemini-1.5-flash-002',
-        'gemini-1.5-pro-002'
+        'gemini-flash-lite-latest',
+        'gemini-flash-latest'
     ]
-    
-    try:
-        voorradig = [m.name.replace("models/", "") for m in client.models.list()]
-        for m in voorradig:
-            if m not in kandidaten and 'gemini' in m:
-                kandidaten.append(m)
-    except Exception:
-        pass
 
     for model_naam in kandidaten:
         try:
@@ -69,21 +60,25 @@ def bepaal_werkend_model(client):
         except Exception:
             continue
 
-    return None
+    return 'gemini-flash-latest'
 
 MODEL_NAAM = bepaal_werkend_model(ai_client)
 
-def genereer_met_retry(client, model, contents, max_retries=3):
-    """Voert een API-call uit en wacht automatisch als de TPM-limiet (429) bereikt wordt."""
+def genereer_met_retry(client, model, contents, max_retries=4):
+    """Voert een API-call uit en vangt zowel 429 (quota) als 503 (overbelasting van servers) op."""
     for poging in range(max_retries):
         try:
             return client.models.generate_content(model=model, contents=contents)
         except Exception as e:
             err_msg = str(e)
-            if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
+            if "503" in err_msg or "UNAVAILABLE" in err_msg or "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
                 if poging < max_retries - 1:
-                    time.sleep(12)
+                    wachttijd = 15 * (poging + 1)
+                    st.info(f"⏳ Google Gemini servers zijn druk of limiet bereikt ({'503 Overbelast' if '503' in err_msg else '429 Limiet'}). Automatische pauze van {wachttijd} seconden voor poging {poging + 2}/{max_retries}...")
+                    time.sleep(wachttijd)
                     continue
+                else:
+                    st.error("⚠️ De limiet voor de Gemini API is tijdelijk bereikt of de servers zijn te druk. Wacht even 1-2 minuten en probeer het opnieuw.")
             raise e
 
 # Session state variabelen
@@ -198,11 +193,12 @@ if submit_button:
                     if row.get('Onderwerp (NL)'):
                         dossier_samenvattingen[doc_id]["Onderwerpen"].add(str(row.get('Onderwerp (NL)')).strip())
                     
-                    # Flexible uitlezing van de Inhoudskolom
+                    # Flexible en robuuste uitlezing van de Inhoudskolom (hoofdletter-onafhankelijk)
                     inhoud_val = (
                         row.get('Inhoud & Cijfers (NL)') or 
+                        row.get('Inhoud & cijfers (NL)') or 
                         row.get('Inhoud & Cijfers') or 
-                        row.get('Inhoud (NL)') or 
+                        row.get('Inhoud & cijfers') or 
                         row.get('Inhoud') or 
                         ''
                     )
@@ -235,7 +231,7 @@ CRITISCHE SELECTIECRITERIA:
 3. Als er maar 1 of 2 dossiers echt over het gevraagde onderwerp gaan, geef dan OOK alleen die 1 of 2 Document_ID's terug. Kwaliteit en nauwkeurigheid gaan boven kwantiteit!
 4. Geef maximaal {max_dossiers} meest relevante Document_ID's terug, maar liever MINDER als er niet meer relevante dossiers zijn.
 
-Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's. Geen extra tekst of uitleg.
+Geef UITSLUITEND de exacta Document_ID's terug gescheiden door komma's. Geen extra tekst of uitleg.
 """
 
                 try:
@@ -243,8 +239,6 @@ Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's. Geen ext
                     geselecteerde_doc_ids = [d.strip() for d in res_filter.text.split(',') if d.strip()]
                 except Exception as e:
                     st.error(f"Fout tijdens het scannen van de index ({MODEL_NAAM}): {e}")
-                    if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                        st.info("💡 De API is momenteel druk bezet. Wacht circa 30 seconden en probeer het nogmaals.")
                     st.stop()
 
         if not geselecteerde_doc_ids:
@@ -261,8 +255,17 @@ Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's. Geen ext
                 if b_naam and b_naam not in eind_bestanden_lijst:
                     eind_bestanden_lijst.append(b_naam)
 
-        # STAP 2: Originele documenten ophalen uit Google Drive (Met flexibele zoekfunctie)
-        with st.spinner(f"Stap 2/3: Originele bestanden ophalen uit Drive ({len(eind_bestanden_lijst)} pagina's/bestanden verzameld)..."):
+        # DEBUG MELDING: Het overzicht van wat er precies uit de Sheet is geselecteerd
+        with st.expander("🔍 Bekijk details van de geselecteerde documenten uit de Sheet", expanded=True):
+            st.write(f"**Geselecteerde Document_ID's door Gemini:** `{geselecteerde_doc_ids}`")
+            st.write(f"**Gevonden bestandsnamen in Google Sheet:** `{eind_bestanden_lijst}`")
+
+        if not eind_bestanden_lijst:
+            st.error("Gemini heeft Document_ID's geselecteerd, maar er staan geen geldige bestandsnamen gekoppeld aan deze ID's in de Google Sheet.")
+            st.stop()
+
+        # STAP 2: Originele documenten ophalen uit Google Drive (Flexibele zoeklogica)
+        with st.spinner(f"Stap 2/3: Originele bestanden ophalen uit Drive ({len(eind_bestanden_lijst)} bestanden verzameld)..."):
             onderzoeks_payload = [
                 f"""Jij bent een financieel-historisch expert en archivaris.
 Beantwoord onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de meegeleverde originele archiefstukken.
@@ -279,26 +282,39 @@ INSTRUCTIES VOOR JE RAPPORT:
             ]
 
             geladen_aantal = 0
+            missing_files = []
+
             for b_naam in eind_bestanden_lijst:
                 if st.session_state.gestopt:
                     st.warning("Onderzoek geannuleerd bij het ophalen van bestanden.")
                     st.stop()
 
-                b_naam_schoon = b_naam.strip("'\" ")
+                b_naam_schoon = str(b_naam).strip("'\" ")
                 if ":" in b_naam_schoon:
                     b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
                 
-                # 1. Probeer een exacte bestandsnaam match
-                query = f"name = '{b_naam_schoon}' and trashed = false"
-                res = drive_service.files().list(q=query, fields='files(id, name, mimeType)').execute()
-                bestanden = res.get('files', [])
+                # Basisnaam en optie zonder extensie
+                basis_naam = b_naam_schoon.split('/')[-1]
+                naam_zonder_ext = basis_naam.rsplit('.', 1)[0] if '.' in basis_naam else basis_naam
 
-                # 2. Probeer een flexibelere match zonder extensie
-                if not bestanden:
-                    schoon_zonder_ext = b_naam_schoon.rsplit('.', 1)[0]
-                    query_flexibel = f"name contains '{schoon_zonder_ext}' and trashed = false"
-                    res = drive_service.files().list(q=query_flexibel, fields='files(id, name, mimeType)').execute()
-                    bestanden = res.get('files', [])
+                bestanden = []
+
+                # 1. Exacte naam
+                query1 = f"name = '{b_naam_schoon}' and trashed = false"
+                res1 = drive_service.files().list(q=query1, fields='files(id, name, mimeType)').execute()
+                bestanden = res1.get('files', [])
+
+                # 2. Basisnaam
+                if not bestanden and basis_naam != b_naam_schoon:
+                    query2 = f"name = '{basis_naam}' and trashed = false"
+                    res2 = drive_service.files().list(q=query2, fields='files(id, name, mimeType)').execute()
+                    bestanden = res2.get('files', [])
+
+                # 3. Zoek op gedeeltelijke naam (contains)
+                if not bestanden and len(naam_zonder_ext) > 1:
+                    query3 = f"name contains '{naam_zonder_ext}' and trashed = false"
+                    res3 = drive_service.files().list(q=query3, fields='files(id, name, mimeType)').execute()
+                    bestanden = res3.get('files', [])
 
                 if bestanden:
                     f = bestanden[0]
@@ -353,10 +369,13 @@ INSTRUCTIES VOOR JE RAPPORT:
                     except Exception as e:
                         st.warning(f"Kon {b_real_naam} niet laden: {e}")
                 else:
-                    st.warning(f"Bestand '{b_naam_schoon}' niet gevonden in Google Drive.")
+                    missing_files.append(b_naam_schoon)
+
+        if missing_files:
+            st.warning(f"⚠️ De volgende bestanden uit de Sheet konden niet op Drive worden gevonden: {missing_files}")
 
         if geladen_aantal == 0:
-            st.error("De geselecteerde bestanden konden niet worden teruggevonden in Google Drive.")
+            st.error("Geen van de geselecteerde bestanden kon worden teruggevonden in Google Drive.")
             st.stop()
 
         # STAP 3: Analyse uitvoeren via Gemini
@@ -367,11 +386,10 @@ INSTRUCTIES VOOR JE RAPPORT:
 
             try:
                 st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
-                analyse_response = st.session_state.actieve_chat.send_message(onderzoeks_payload)
+                analyse_response = genereer_met_retry(ai_client, MODEL_NAAM, onderzoeks_payload)
                 st.session_state.chat_historie.append(("assistant", analyse_response.text))
             except Exception as e:
                 st.error(f"Fout tijdens Gemini analyse: {e}")
-                st.info("💡 Tip: Probeer 'Max dossiers' te verlagen naar bijv. 5 dossiers om binnen de limieten te blijven.")
 
 # ------------------------------------------------------------------------------
 # 5. WEERGAVE BRONNEN MET PREVIEWS & RAPPORT

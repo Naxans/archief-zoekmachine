@@ -160,17 +160,25 @@ if submit_button:
 
             geselecteerde_doc_ids = []
 
-            # Directe match op Document_ID of Bestandsnaam in zoekopdracht
-            for row in data:
-                doc_id_val = str(row.get('Document_ID', '')).strip()
-                b_naam_val = str(row.get('Bestandsnaam', '')).strip()
-                
-                if (doc_id_val and doc_id_val.lower() in onderzoeksvraag.lower()) or \
-                   (b_naam_val and b_naam_val.lower() in onderzoeksvraag.lower()):
-                    if doc_id_val and doc_id_val not in geselecteerde_doc_ids:
-                        geselecteerde_doc_ids.append(doc_id_val)
+            # 1. Slimme directe match op relevante trefwoorden in de Sheet (omzeilt lange/afwijkende ID's)
+            negeer_woorden = ['geef', 'alle', 'over', 'radio', 'model', 'voor', 'naar', 'van', 'informatie', 'weet', 'welke']
+            zoekwoorden = [w.lower() for w in onderzoeksvraag.split() if len(w) > 3 and w.lower() not in negeer_woorden]
 
-            # Zoek via Gemini naar relevante Document_ID's als er geen directe match was
+            if zoekwoorden:
+                for row in data:
+                    doc_id_val = str(row.get('Document_ID', '')).strip()
+                    b_naam_val = str(row.get('Bestandsnaam', '')).strip()
+                    inhoud_val = str(row.get('Inhoud & Cijfers (NL)', '') or row.get('Inhoud & cijfers (NL)', '') or row.get('Inhoud', '')).strip()
+                    
+                    combi_tekst = f"{doc_id_val} {b_naam_val} {inhoud_val}".lower()
+                    
+                    # Als minstens 1 uniek trefwoord (bijv. 'vedette' of 'royal') voorkomt
+                    if any(woord in combi_tekst for woord in zoekwoorden):
+                        gekozen_id = doc_id_val if doc_id_val else f"SINGLE_{b_naam_val}"
+                        if gekozen_id and gekozen_id not in geselecteerde_doc_ids:
+                            geselecteerde_doc_ids.append(gekozen_id)
+
+            # 2. Zoek via Gemini naar relevante Document_ID's als er geen directe trefwoordmatch was
             if not geselecteerde_doc_ids:
                 dossier_samenvattingen = {}
                 for row in data:
@@ -193,7 +201,7 @@ if submit_button:
                     if row.get('Onderwerp (NL)'):
                         dossier_samenvattingen[doc_id]["Onderwerpen"].add(str(row.get('Onderwerp (NL)')).strip())
                     
-                    # Flexible en robuuste uitlezing van de Inhoudskolom (hoofdletter-onafhankelijk)
+                    # Flexibele uitlezing van Inhoudskolom
                     inhoud_val = (
                         row.get('Inhoud & Cijfers (NL)') or 
                         row.get('Inhoud & cijfers (NL)') or 
@@ -230,14 +238,14 @@ CRITISCHE SELECTIECRITERIA:
 2. Geef maximaal {max_dossiers} relevante Document_ID's terug.
 3. ALLES OF NIETS: Als er absoluut GEEN enkel dossier relevant is voor deze zoekopdracht, antwoord dan UITSLUITEND met het woord: GEEN_MATCH.
 
-Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's, OF het woord GEEN_MATCH. Geen extra uitleg of beleefdheid zinnen.
+Geef UITSLUITEND de exacta Document_ID's terug gescheiden door komma's, OF het woord GEEN_MATCH. Geen extra uitleg of beleefdheid zinnen.
 """
 
                 try:
                     res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
                     raw_text = res_filter.text.strip()
                     
-                    # Controleer of Gemini aangaf dat er geen documenten gevonden zijn
+                    # Controleer op negatieve/lege antwoorden van Gemini
                     negatieve_termen = ["geen_match", "geen resultaten", "geen documenten", "niets gevonden"]
                     if any(term in raw_text.lower() for term in negatieve_termen):
                         geselecteerde_doc_ids = []
@@ -263,14 +271,14 @@ Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's, OF het w
 
         # DEBUG MELDING: Details van geselecteerde documenten
         with st.expander("🔍 Bekijk details van de geselecteerde documenten uit de Sheet", expanded=True):
-            st.write(f"**Geselecteerde Document_ID's door Gemini:** `{geselecteerde_doc_ids}`")
+            st.write(f"**Geselecteerde Document_ID's:** `{geselecteerde_doc_ids}`")
             st.write(f"**Gevonden bestandsnamen in Google Sheet:** `{eind_bestanden_lijst}`")
 
         if not eind_bestanden_lijst:
-            st.error("Gemini heeft Document_ID's geselecteerd, maar er staan geen geldige bestandsnamen gekoppeld aan deze ID's in de Google Sheet.")
+            st.error("Document_ID's zijn geselecteerd, maar er staan geen geldige bestandsnamen gekoppeld aan deze ID's in de Google Sheet.")
             st.stop()
 
-        # STAP 2: Originele documenten ophalen uit Google Drive (Flexibele zoeklogica)
+        # STAP 2: Originele documenten ophalen uit Google Drive
         with st.spinner(f"Stap 2/3: Originele bestanden ophalen uit Drive ({len(eind_bestanden_lijst)} bestanden verzameld)..."):
             onderzoeks_payload = [
                 f"""Jij bent een financieel-historisch expert en archivaris.
@@ -299,7 +307,6 @@ INSTRUCTIES VOOR JE RAPPORT:
                 if ":" in b_naam_schoon:
                     b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
                 
-                # Basisnaam en optie zonder extensie
                 basis_naam = b_naam_schoon.split('/')[-1]
                 naam_zonder_ext = basis_naam.rsplit('.', 1)[0] if '.' in basis_naam else basis_naam
 

@@ -113,7 +113,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: Geef me de bestuursleden van de firma "Radio Belge de Construction" in het jaar 1935',
+        placeholder='Bijv: geef me alle informatie van de royal record radio model vedette',
         height=100
     )
 with col2:
@@ -197,8 +197,17 @@ if submit_button:
                         dossier_samenvattingen[doc_id]["Personen"].add(str(row.get('Genoemde Personen')).strip())
                     if row.get('Onderwerp (NL)'):
                         dossier_samenvattingen[doc_id]["Onderwerpen"].add(str(row.get('Onderwerp (NL)')).strip())
-                    if row.get('Inhoud & cijfers (NL)'):
-                        dossier_samenvattingen[doc_id]["Inhoud"].add(str(row.get('Inhoud & cijfers (NL)')).strip())
+                    
+                    # Flexible uitlezing van de Inhoudskolom
+                    inhoud_val = (
+                        row.get('Inhoud & cijfers (NL)') or 
+                        row.get('Inhoud & cijfers') or 
+                        row.get('Inhoud (NL)') or 
+                        row.get('Inhoud') or 
+                        ''
+                    )
+                    if inhoud_val:
+                        dossier_samenvattingen[doc_id]["Inhoud"].add(str(inhoud_val).strip())
 
                 index_regels = []
                 for d_id, d_info in dossier_samenvattingen.items():
@@ -252,7 +261,7 @@ Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's. Geen ext
                 if b_naam and b_naam not in eind_bestanden_lijst:
                     eind_bestanden_lijst.append(b_naam)
 
-        # STAP 2: Originele documenten ophalen uit Google Drive
+        # STAP 2: Originele documenten ophalen uit Google Drive (Met flexibele zoekfunctie)
         with st.spinner(f"Stap 2/3: Originele bestanden ophalen uit Drive ({len(eind_bestanden_lijst)} pagina's/bestanden verzameld)..."):
             onderzoeks_payload = [
                 f"""Jij bent een financieel-historisch expert en archivaris.
@@ -261,7 +270,7 @@ Beantwoord onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de
 ONDERZOEKSVRAAG: {onderzoeksvraag}
 
 INSTRUCTIES VOOR JE RAPPORT:
-1. Richt je specifiek op de gevraagde firma, personen en periode.
+1. Richt je specifiek op de gevraagde firma, personen, modellen en periode.
 2. Structureer je antwoord helder.
 3. Vermeld alle concrete namen, functies, cijfers en details die op de documenten staan.
 4. Citeer steeds de bestandsnaam (bijv. 'document.pdf' of 'foto.jpg') wanneer je naar specifieke informatie verwijst.
@@ -279,12 +288,14 @@ INSTRUCTIES VOOR JE RAPPORT:
                 if ":" in b_naam_schoon:
                     b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
                 
+                # 1. Probeer een exacte bestandsnaam match
                 query = f"name = '{b_naam_schoon}' and trashed = false"
                 res = drive_service.files().list(q=query, fields='files(id, name, mimeType)').execute()
                 bestanden = res.get('files', [])
 
+                # 2. Probeer een flexibelere match zonder extensie
                 if not bestanden:
-                    schoon_zonder_ext = b_naam_schoon.replace('.jpg', '').replace('.JPG', '').replace('.jpeg', '').replace('.png', '').replace('.pdf', '')
+                    schoon_zonder_ext = b_naam_schoon.rsplit('.', 1)[0]
                     query_flexibel = f"name contains '{schoon_zonder_ext}' and trashed = false"
                     res = drive_service.files().list(q=query_flexibel, fields='files(id, name, mimeType)').execute()
                     bestanden = res.get('files', [])

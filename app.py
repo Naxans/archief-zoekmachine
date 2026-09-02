@@ -188,20 +188,25 @@ if submit_button:
                             "Datum": row.get('Datum Document', 'Onbekend'),
                             "Personen": set(),
                             "Onderwerpen": set(),
+                            "Inhoud": set(),
                             "Paginas": 0
                         }
                     
                     dossier_samenvattingen[doc_id]["Paginas"] += 1
                     if row.get('Genoemde Personen'):
-                        dossier_samenvattingen[doc_id]["Personen"].add(str(row.get('Genoemde Personen')))
+                        dossier_samenvattingen[doc_id]["Personen"].add(str(row.get('Genoemde Personen')).strip())
                     if row.get('Onderwerp (NL)'):
-                        dossier_samenvattingen[doc_id]["Onderwerpen"].add(str(row.get('Onderwerp (NL)')))
+                        dossier_samenvattingen[doc_id]["Onderwerpen"].add(str(row.get('Onderwerp (NL)')).strip())
+                    if row.get('Inhoud & cijfers (NL)'):
+                        dossier_samenvattingen[doc_id]["Inhoud"].add(str(row.get('Inhoud & cijfers (NL)')).strip())
 
                 index_regels = []
                 for d_id, d_info in dossier_samenvattingen.items():
                     pers_str = ", ".join(d_info["Personen"]) if d_info["Personen"] else "Geen"
                     ond_str = ", ".join(d_info["Onderwerpen"]) if d_info["Onderwerpen"] else "Geen"
-                    regel = f"Document_ID: {d_id} | Datum: {d_info['Datum']} | Personen: {pers_str} | Onderwerp: {ond_str} | Pagina's: {d_info['Paginas']}"
+                    inhoud_str = " | ".join(d_info["Inhoud"]) if d_info["Inhoud"] else "Geen"
+                    
+                    regel = f"Document_ID: {d_id} | Datum: {d_info['Datum']} | Personen: {pers_str} | Onderwerp: {ond_str} | Inhoud: {inhoud_str}"
                     index_regels.append(regel)
 
                 index_tekst = "\n".join(index_regels)
@@ -209,16 +214,17 @@ if submit_button:
                     index_tekst = index_tekst[:250000]
 
                 filter_prompt = f"""
-Jij bent hoofdarchivaris. Hieronder staat een overzicht van de unieke dossiers (Document_ID's) in ons archief:
+Jij bent een zeer strenge en nauwkeurige hoofdarchivaris. Hieronder staat een overzicht van de unieke dossiers (Document_ID's) in ons archief inclusief datum, personen, onderwerpen en inhoud/cijfers:
 
 {index_tekst}
 
 ONDERZOEKSVRAAG: "{onderzoeksvraag}"
 
-INSTRUCTIES:
-1. Welke dossiers (Document_ID's) uit het overzicht zijn het meest relevant voor deze specifieke vraag?
-2. Let goed op PERSONEN, ONDERWERP en DATUM/PERIODE.
-3. Geef maximaal {max_dossiers} meest relevante Document_ID's terug.
+CRITISCHE SELECTIECRITERIA:
+1. Selecteer UITSLUITEND dossiers (Document_ID's) die een DIRECTE, SPECIFIEKE en SUBSTANTIËLE match hebben met de onderzoeksvraag (bijv. exacte merknamen, specifieke modelnamen, concrete personen, bedragen of specifieke gebeurtenissen).
+2. Wees extreem kritisch: selecteer GEEN dossiers die alleen algemene termen bevatten (zoals 'radio', 'factuur', 'brief' of 'document') als het gevraagde specifieke onderwerp of de specifieke naam niet genoemd wordt in het dossier.
+3. Als er maar 1 of 2 dossiers echt over het gevraagde onderwerp gaan, geef dan OOK alleen die 1 of 2 Document_ID's terug. Kwaliteit en nauwkeurigheid gaan boven kwantiteit!
+4. Geef maximaal {max_dossiers} meest relevante Document_ID's terug, maar liever MINDER als er niet meer relevante dossiers zijn.
 
 Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's. Geen extra tekst of uitleg.
 """

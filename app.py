@@ -40,7 +40,7 @@ except Exception as e:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 2. CONFIGURATIE & DYNAMISCHE MODEL-DETECTIE (OPLOSSING 2)
+# 2. CONFIGURATIE & DYNAMISCHE MODEL-DETECTIE
 # ------------------------------------------------------------------------------
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
@@ -226,23 +226,29 @@ Jij bent een zeer strenge en nauwkeurige hoofdarchivaris. Hieronder staat een ov
 ONDERZOEKSVRAAG: "{onderzoeksvraag}"
 
 CRITISCHE SELECTIECRITERIA:
-1. Selecteer UITSLUITEND dossiers (Document_ID's) die een DIRECTE, SPECIFIEKE en SUBSTANTIËLE match hebben met de onderzoeksvraag (bijv. exacte merknamen, specifieke modelnamen, concrete personen, bedragen of specifieke gebeurtenissen).
-2. Wees extreem kritisch: selecteer GEEN dossiers die alleen algemene termen bevatten (zoals 'radio', 'factuur', 'brief' of 'document') als het gevraagde specifieke onderwerp of de specifieke naam niet genoemd wordt in het dossier.
-3. Als er maar 1 of 2 dossiers echt over het gevraagde onderwerp gaan, geef dan OOK alleen die 1 of 2 Document_ID's terug. Kwaliteit en nauwkeurigheid gaan boven kwantiteit!
-4. Geef maximaal {max_dossiers} meest relevante Document_ID's terug, maar liever MINDER als er niet meer relevante dossiers zijn.
+1. Selecteer dossiers (Document_ID's) die een match hebben met de onderzoeksvraag (bijv. merknamen, modelnamen, personen of onderwerpen).
+2. Geef maximaal {max_dossiers} relevante Document_ID's terug.
+3. ALLES OF NIETS: Als er absoluut GEEN enkel dossier relevant is voor deze zoekopdracht, antwoord dan UITSLUITEND met het woord: GEEN_MATCH.
 
-Geef UITSLUITEND de exacta Document_ID's terug gescheiden door komma's. Geen extra tekst of uitleg.
+Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's, OF het woord GEEN_MATCH. Geen extra uitleg of beleefdheid zinnen.
 """
 
                 try:
                     res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
-                    geselecteerde_doc_ids = [d.strip() for d in res_filter.text.split(',') if d.strip()]
+                    raw_text = res_filter.text.strip()
+                    
+                    # Controleer of Gemini aangaf dat er geen documenten gevonden zijn
+                    negatieve_termen = ["geen_match", "geen resultaten", "geen documenten", "niets gevonden"]
+                    if any(term in raw_text.lower() for term in negatieve_termen):
+                        geselecteerde_doc_ids = []
+                    else:
+                        geselecteerde_doc_ids = [d.strip() for d in raw_text.split(',') if d.strip()]
                 except Exception as e:
                     st.error(f"Fout tijdens het scannen van de index ({MODEL_NAAM}): {e}")
                     st.stop()
 
         if not geselecteerde_doc_ids:
-            st.warning("Geen relevante documenten gevonden op basis van de zoekopdracht.")
+            st.warning("⚠️ Geen relevante documenten gevonden in het archief voor deze zoekopdracht.")
             st.stop()
 
         # STAP 1.5: Verzamel ALLE bestanden die bij de geselecteerde Document_ID's horen
@@ -255,7 +261,7 @@ Geef UITSLUITEND de exacta Document_ID's terug gescheiden door komma's. Geen ext
                 if b_naam and b_naam not in eind_bestanden_lijst:
                     eind_bestanden_lijst.append(b_naam)
 
-        # DEBUG MELDING: Het overzicht van wat er precies uit de Sheet is geselecteerd
+        # DEBUG MELDING: Details van geselecteerde documenten
         with st.expander("🔍 Bekijk details van de geselecteerde documenten uit de Sheet", expanded=True):
             st.write(f"**Geselecteerde Document_ID's door Gemini:** `{geselecteerde_doc_ids}`")
             st.write(f"**Gevonden bestandsnamen in Google Sheet:** `{eind_bestanden_lijst}`")

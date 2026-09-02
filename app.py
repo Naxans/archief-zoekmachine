@@ -160,8 +160,8 @@ if submit_button:
 
             geselecteerde_doc_ids = []
 
-            # 1. Slimme directe match op relevante trefwoorden in de Sheet (omzeilt lange/afwijkende ID's)
-            negeer_woorden = ['geef', 'alle', 'over', 'radio', 'model', 'voor', 'naar', 'van', 'informatie', 'weet', 'welke']
+            # 1. Strikte directe match: ALLE unieke trefwoorden uit de vraag moeten voorkomen
+            negeer_woorden = ['geef', 'alle', 'over', 'radio', 'model', 'voor', 'naar', 'van', 'informatie', 'weet', 'welke', 'zoek', 'vind', 'wat', 'is', 'de', 'het', 'een']
             zoekwoorden = [w.lower() for w in onderzoeksvraag.split() if len(w) > 3 and w.lower() not in negeer_woorden]
 
             if zoekwoorden:
@@ -172,13 +172,13 @@ if submit_button:
                     
                     combi_tekst = f"{doc_id_val} {b_naam_val} {inhoud_val}".lower()
                     
-                    # Als minstens 1 uniek trefwoord (bijv. 'vedette' of 'royal') voorkomt
-                    if any(woord in combi_tekst for woord in zoekwoorden):
+                    # ALLE unieke zoekwoorden moeten voorkomen in de rij (strikte filter)
+                    if all(woord in combi_tekst for woord in zoekwoorden):
                         gekozen_id = doc_id_val if doc_id_val else f"SINGLE_{b_naam_val}"
                         if gekozen_id and gekozen_id not in geselecteerde_doc_ids:
                             geselecteerde_doc_ids.append(gekozen_id)
 
-            # 2. Zoek via Gemini naar relevante Document_ID's als er geen directe trefwoordmatch was
+            # 2. Zoek via Gemini naar relevante Document_ID's als er geen strikte trefwoordmatch was
             if not geselecteerde_doc_ids:
                 dossier_samenvattingen = {}
                 for row in data:
@@ -234,11 +234,11 @@ Jij bent een zeer strenge en nauwkeurige hoofdarchivaris. Hieronder staat een ov
 ONDERZOEKSVRAAG: "{onderzoeksvraag}"
 
 CRITISCHE SELECTIECRITERIA:
-1. Selecteer dossiers (Document_ID's) die een match hebben met de onderzoeksvraag (bijv. merknamen, modelnamen, personen of onderwerpen).
+1. Selecteer dossiers (Document_ID's) die een specifieke match hebben met de onderzoeksvraag (bijv. merknamen, modelnamen, personen of onderwerpen).
 2. Geef maximaal {max_dossiers} relevante Document_ID's terug.
 3. ALLES OF NIETS: Als er absoluut GEEN enkel dossier relevant is voor deze zoekopdracht, antwoord dan UITSLUITEND met het woord: GEEN_MATCH.
 
-Geef UITSLUITEND de exacta Document_ID's terug gescheiden door komma's, OF het woord GEEN_MATCH. Geen extra uitleg of beleefdheid zinnen.
+Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's, OF het woord GEEN_MATCH. Geen extra uitleg of beleefdheid zinnen.
 """
 
                 try:

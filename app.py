@@ -200,8 +200,8 @@ if submit_button:
                     
                     # Flexible uitlezing van de Inhoudskolom
                     inhoud_val = (
-                        row.get('Inhoud & cijfers (NL)') or 
-                        row.get('Inhoud & cijfers') or 
+                        row.get('Inhoud & Cijfers (NL)') or 
+                        row.get('Inhoud & Cijfers') or 
                         row.get('Inhoud (NL)') or 
                         row.get('Inhoud') or 
                         ''

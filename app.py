@@ -46,13 +46,20 @@ DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
 def bepaal_werkend_model(client):
-    """Vraagt actieve modellen op bij Google en test welke daadwerkelijk werkt."""
+    """Test aliassen die werken op jouw API-sleutel."""
     kandidaten = [
-        'gemini-2.0-flash',
-        'gemini-2.0-flash-lite',
-        'gemini-1.5-flash-002',
-        'gemini-1.5-pro-002'
+        'gemini-flash-lite-latest',
+        'gemini-flash-latest'
     ]
+
+    for model_naam in kandidaten:
+        try:
+            client.models.generate_content(model=model_naam, contents="ping")
+            return model_naam
+        except Exception:
+            continue
+
+    return 'gemini-flash-latest'
     
     try:
         voorradig = [m.name.replace("models/", "") for m in client.models.list()]

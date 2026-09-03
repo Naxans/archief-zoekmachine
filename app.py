@@ -46,8 +46,7 @@ DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
 def bepaal_werkend_model(client):
-    """Test aliassen die ondersteund worden door jouw API-sleutel.
-    Probeert eerst gemini-flash-lite-latest vanwege ruimere gratis limieten."""
+    """Test aliassen die ondersteund worden door jouw API-sleutel."""
     kandidaten = [
         'gemini-flash-lite-latest',
         'gemini-flash-latest'
@@ -65,7 +64,7 @@ def bepaal_werkend_model(client):
 MODEL_NAAM = bepaal_werkend_model(ai_client)
 
 def genereer_met_retry(client, model, contents, max_retries=4):
-    """Voert een API-call uit en vangt zowel 429 (quota) als 503 (overbelasting van servers) op."""
+    """Voert een API-call uit met wachttijd bij drukte of quota-limieten."""
     for poging in range(max_retries):
         try:
             return client.models.generate_content(model=model, contents=contents)
@@ -160,25 +159,31 @@ if submit_button:
 
             geselecteerde_doc_ids = []
 
-            # 1. Slimme trefwoordmatch (inclusief Genoemde Personen & meertalige voornaam-variaties)
+            # ------------------------------------------------------------------
+            # SLIMME RELEVANTIE-SCORING (WEIGHTED MATCHING)
+            # ------------------------------------------------------------------
             negeer_woorden = [
                 'geef', 'alle', 'over', 'radio', 'model', 'voor', 'naar', 'van', 'informatie', 
                 'weet', 'welke', 'zoek', 'vind', 'wat', 'is', 'de', 'het', 'een', 'wanneer', 
-                'overleed', 'gestorven', 'waar', 'wie', 'hoe', 'quand', 'où', 'geboren', 'overleden'
+                'overleed', 'gestorven', 'waar', 'wie', 'hoe', 'quand', 'où', 'geboren', 'overleden',
+                'dossier', 'document', 'archief', 'toon', 'laat', 'zien', 'hebt', 'gehad', 'expliciet'
             ]
             
+            # Unieke zoekwoorden verzamelen
             ruwe_woorden = [w.lower() for w in onderzoeksvraag.split() if len(w) > 2 and w.lower() not in negeer_woorden]
             
-            # Voeg automatische meertalige synoniemen toe voor veelvoorkomende voornamen
-            zoekwoorden = []
+            zoek_groepen = []
             for w in ruwe_woorden:
-                zoekwoorden.append(w)
-                if w == 'emiel': zoekwoorden.append('emile')
-                elif w == 'emile': zoekwoorden.append('emiel')
-                elif w == 'jan': zoekwoorden.append('jean')
-                elif w == 'jean': zoekwoorden.append('jan')
+                varianten = [w]
+                if w == 'emiel': varianten.append('emile')
+                elif w == 'emile': varianten.append('emiel')
+                elif w == 'jan': varianten.append('jean')
+                elif w == 'jean': varianten.append('jan')
+                zoek_groepen.append(varianten)
 
-            if zoekwoorden:
+            doc_scores = {}
+
+            if zoek_groepen:
                 for row in data:
                     doc_id_val = str(row.get('Document_ID', '')).strip()
                     b_naam_val = str(row.get('Bestandsnaam', '')).strip()
@@ -187,13 +192,31 @@ if submit_button:
                     
                     combi_tekst = f"{doc_id_val} {b_naam_val} {personen_val} {inhoud_val}".lower()
                     
-                    # Match wanneer minstens één van de specifieke zoekwoorden/namen voorkomt
-                    if any(woord in combi_tekst for woord in zoekwoorden):
-                        gekozen_id = doc_id_val if doc_id_val else f"SINGLE_{b_naam_val}"
-                        if gekozen_id and gekozen_id not in geselecteerde_doc_ids:
-                            geselecteerde_doc_ids.append(gekozen_id)
+                    gekozen_id = doc_id_val if doc_id_val else f"SINGLE_{b_naam_val}"
+                    if not gekozen_id:
+                        continue
 
-            # 2. Zoek via Gemini naar relevante Document_ID's als er geen directe trefwoordmatch was
+                    # Bereken relevantiescore voor deze rij
+                    matched_groepen_count = 0
+                    score = 0
+                    
+                    for grp in zoek_groepen:
+                        if any(v in combi_tekst for v in grp):
+                            matched_groepen_count += 1
+                            score += 5  # Basisscore per match
+
+                    # Extra bonus als álle zoekwoorden in de rij staan
+                    if matched_groepen_count == len(zoek_groepen):
+                        score += 10
+
+                    if score > 0:
+                        doc_scores[gekozen_id] = doc_scores.get(gekozen_id, 0) + score
+
+                # Sorteer op hoogste score en pak de beste resultaten
+                gesorteerde_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)
+                geselecteerde_doc_ids = [doc_id for doc_id, score in gesorteerde_docs[:max_dossiers]]
+
+            # 2. Fallback via Gemini als er géén enkele match was
             if not geselecteerde_doc_ids:
                 dossier_samenvattingen = {}
                 for row in data:
@@ -244,18 +267,18 @@ if submit_button:
                     index_tekst = index_tekst[:250000]
 
                 filter_prompt = f"""
-Jij bent een zeer strenge en nauwkeurige hoofdarchivaris. Hieronder staat een overzicht van de unieke dossiers (Document_ID's) in ons archief inclusief datum, personen, onderwerpen en inhoud/cijfers:
+Jij bent een zeer strenge en nauwkeurige hoofdarchivaris. Hieronder staat een overzicht van de unieke dossiers (Document_ID's) in ons archief:
 
 {index_tekst}
 
 ONDERZOEKSVRAAG: "{onderzoeksvraag}"
 
 CRITISCHE SELECTIECRITERIA:
-1. Selecteer dossiers (Document_ID's) die een specifieke match hebben met de onderzoeksvraag (bijv. merknamen, modelnamen, personen of onderwerpen).
+1. Selecteer UITSLUITEND dossiers (Document_ID's) die DIRECT te maken hebben met de specifieke personen, merken of specifieke vragen.
 2. Geef maximaal {max_dossiers} relevante Document_ID's terug.
-3. ALLES OF NIETS: Als er absoluut GEEN enkel dossier relevant is voor deze zoekopdracht, antwoord dan UITSLUITEND met het woord: GEEN_MATCH.
+3. ALLES OF NIETS: Als er geen enkel dossier specifiek relevant is, antwoord dan UITSLUITEND met het woord: GEEN_MATCH.
 
-Geef UITSLUITEND de exacta Document_ID's terug gescheiden door komma's, OF het woord GEEN_MATCH. Geen extra uitleg of beleefdheid zinnen.
+Geef UITSLUITEND de exacta Document_ID's terug gescheiden door komma's, OF het woord GEEN_MATCH.
 """
 
                 try:
@@ -287,8 +310,8 @@ Geef UITSLUITEND de exacta Document_ID's terug gescheiden door komma's, OF het w
 
         # DEBUG MELDING: Details van geselecteerde documenten
         with st.expander("🔍 Bekijk details van de geselecteerde documenten uit de Sheet", expanded=True):
-            st.write(f"**Geselecteerde Document_ID's:** `{geselecteerde_doc_ids}`")
-            st.write(f"**Gevonden bestandsnamen in Google Sheet:** `{eind_bestanden_lijst}`")
+            st.write(f"**Geselecteerde Document_ID's ({len(geselecteerde_doc_ids)}):** `{geselecteerde_doc_ids}`")
+            st.write(f"**Gevonden bestandsnamen ({len(eind_bestanden_lijst)}):** `{eind_bestanden_lijst}`")
 
         if not eind_bestanden_lijst:
             st.error("Document_ID's zijn geselecteerd, maar er staan geen geldige bestandsnamen gekoppeld aan deze ID's in de Google Sheet.")

@@ -89,6 +89,8 @@ if "bron_details" not in st.session_state:
     st.session_state.bron_details = []
 if "gestopt" not in st.session_state:
     st.session_state.gestopt = False
+if "start_zoekopdracht" not in st.session_state:
+    st.session_state.start_zoekopdracht = False
 
 # ------------------------------------------------------------------------------
 # 3. STREAMLIT INTERFACE & SCHERM-RESET LOGICA
@@ -102,12 +104,13 @@ else:
     st.error("Kon geen werkend Gemini-model vinden voor deze API-sleutel. Controleer je Gemini API key.")
     st.stop()
 
-def reset_scherm():
-    """Wist direct het geheugen bij een nieuwe zoekopdracht zodat oude bronnen verdwijnen."""
+def voer_harde_reset_uit():
+    """Wist geheugen én zet een vlag om direct een schone pagina te forceren."""
     st.session_state.gestopt = False
     st.session_state.actieve_chat = None
     st.session_state.chat_historie = []
     st.session_state.bron_details = []
+    st.session_state.start_zoekopdracht = True
 
 # Invoer van de onderzoeksvraag & parameters
 col1, col2 = st.columns([3, 1])
@@ -123,23 +126,25 @@ with col2:
 # Knoppenbalk met Actie- en Stop-knoppen
 btn_col1, btn_col2 = st.columns([2, 1])
 with btn_col1:
-    # Met on_click=reset_scherm worden oude bronnen en foto's DIRECT schoongeveegd
-    submit_button = st.button("🔍 Voer onderzoek uit", type="primary", use_container_width=True, on_click=reset_scherm)
+    # Met on_click=voer_harde_reset_uit worden oude bronnen en foto's DIRECT geschrapt
+    submit_button = st.button("🔍 Voer onderzoek uit", type="primary", use_container_width=True, on_click=voer_harde_reset_uit)
 with btn_col2:
     stop_button = st.button("⛔ Stop / Annuleer", type="secondary", use_container_width=True)
 
 # Directe stop-afhandeling
 if stop_button:
     st.session_state.gestopt = True
+    st.session_state.start_zoekopdracht = False
     st.warning("⚠️ Onderzoek is direct geannuleerd.")
     st.stop()
 
 # ------------------------------------------------------------------------------
 # 4. ONDERZOEKSLOGICA
 # ------------------------------------------------------------------------------
-if submit_button:
+if st.session_state.start_zoekopdracht:
     if not onderzoeksvraag.strip():
         st.warning("Voer a.u.b. een onderzoeksvraag in.")
+        st.session_state.start_zoekopdracht = False
     else:
         # STAP 1: Inhoudsopgave scannen uit Google Sheet
         with st.spinner("Stap 1/3: Inhoudsopgave (Google Sheet) scannen..."):
@@ -152,13 +157,16 @@ if submit_button:
                 data = [row for row in alle_records if str(row.get('Bestandsnaam', '')).strip()]
             except Exception as e:
                 st.error(f"Kon de Google Sheet niet openen: {e}")
+                st.session_state.start_zoekopdracht = False
                 st.stop()
 
             if not data:
                 st.error("De Google Sheet bevat geen geldige gegevens.")
+                st.session_state.start_zoekopdracht = False
                 st.stop()
 
             if st.session_state.gestopt:
+                st.session_state.start_zoekopdracht = False
                 st.stop()
 
             geselecteerde_doc_ids = []
@@ -302,10 +310,12 @@ Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's, OF het w
                         geselecteerde_doc_ids = [d.strip() for d in raw_text.split(',') if d.strip()]
                 except Exception as e:
                     st.error(f"Fout tijdens het scannen van de index ({MODEL_NAAM}): {e}")
+                    st.session_state.start_zoekopdracht = False
                     st.stop()
 
         if not geselecteerde_doc_ids:
             st.warning("⚠️ Geen relevante documenten gevonden in het archief voor deze zoekopdracht.")
+            st.session_state.start_zoekopdracht = False
             st.stop()
 
         # STAP 1.5: Verzamel ALLE bestanden die bij de geselecteerde Document_ID's horen
@@ -325,6 +335,7 @@ Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's, OF het w
 
         if not eind_bestanden_lijst:
             st.error("Document_ID's zijn geselecteerd, maar er staan geen geldige bestandsnamen gekoppeld aan deze ID's in de Google Sheet.")
+            st.session_state.start_zoekopdracht = False
             st.stop()
 
         # STAP 2: Originele documenten ophalen uit Google Drive
@@ -350,6 +361,7 @@ INSTRUCTIES VOOR JE RAPPORT:
             for b_naam in eind_bestanden_lijst:
                 if st.session_state.gestopt:
                     st.warning("Onderzoek geannuleerd bij het ophalen van bestanden.")
+                    st.session_state.start_zoekopdracht = False
                     st.stop()
 
                 b_naam_schoon = str(b_naam).strip("'\" ")
@@ -438,12 +450,14 @@ INSTRUCTIES VOOR JE RAPPORT:
 
         if geladen_aantal == 0:
             st.error("Geen van de geselecteerde bestanden kon worden teruggevonden in Google Drive.")
+            st.session_state.start_zoekopdracht = False
             st.stop()
 
         # STAP 3: Analyse uitvoeren via Gemini
         with st.spinner("Stap 3/3: Analyse uitvoeren via Gemini..."):
             if st.session_state.gestopt:
                 st.warning("Onderzoek geannuleerd voor de AI-analyse.")
+                st.session_state.start_zoekopdracht = False
                 st.stop()
 
             try:
@@ -452,6 +466,9 @@ INSTRUCTIES VOOR JE RAPPORT:
                 st.session_state.chat_historie.append(("assistant", analyse_response.text))
             except Exception as e:
                 st.error(f"Fout tijdens Gemini analyse: {e}")
+
+        # Zoekopdracht afgerond
+        st.session_state.start_zoekopdracht = False
 
 # ------------------------------------------------------------------------------
 # 5. WEERGAVE BRONNEN MET PREVIEWS & RAPPORT

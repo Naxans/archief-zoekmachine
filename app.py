@@ -1,5 +1,6 @@
 import io
 import time
+import string
 import logging
 import warnings
 import streamlit as st
@@ -13,7 +14,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.1.0"
+APP_VERSION = "v2.1.1"
 APP_DATE = "2026"
 
 # SDK meldingen onderdrukken voor schone logs
@@ -192,8 +193,9 @@ if st.session_state.start_zoekopdracht:
                 'dossier', 'document', 'archief', 'toon', 'laat', 'zien', 'hebt', 'gehad', 'expliciet'
             ]
             
-            # Unieke zoekwoorden verzamelen
-            ruwe_woorden = [w.lower() for w in onderzoeksvraag.split() if len(w) > 2 and w.lower() not in negeer_woorden]
+            # Verwijder leestekens (zoals ?, ., ,) uit de vraag voor schone matches
+            schoon_vraag = onderzoeksvraag.translate(str.maketrans('', '', string.punctuation))
+            ruwe_woorden = [w.lower() for w in schoon_vraag.split() if len(w) > 2 and w.lower() not in negeer_woorden]
             
             zoek_groepen = []
             for w in ruwe_woorden:

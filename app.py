@@ -91,7 +91,7 @@ if "gestopt" not in st.session_state:
     st.session_state.gestopt = False
 
 # ------------------------------------------------------------------------------
-# 3. STREAMLIT INTERFACE
+# 3. STREAMLIT INTERFACE & SCHERM-RESET LOGICA
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="Archief Zoekmachine", page_icon="🔍", layout="wide")
 st.title("🔍 Archief Zoekmachine")
@@ -101,6 +101,13 @@ if MODEL_NAAM:
 else:
     st.error("Kon geen werkend Gemini-model vinden voor deze API-sleutel. Controleer je Gemini API key.")
     st.stop()
+
+def reset_scherm():
+    """Wist direct het geheugen bij een nieuwe zoekopdracht zodat oude bronnen verdwijnen."""
+    st.session_state.gestopt = False
+    st.session_state.actieve_chat = None
+    st.session_state.chat_historie = []
+    st.session_state.bron_details = []
 
 # Invoer van de onderzoeksvraag & parameters
 col1, col2 = st.columns([3, 1])
@@ -116,7 +123,8 @@ with col2:
 # Knoppenbalk met Actie- en Stop-knoppen
 btn_col1, btn_col2 = st.columns([2, 1])
 with btn_col1:
-    submit_button = st.button("🔍 Voer onderzoek uit", type="primary", use_container_width=True)
+    # Met on_click=reset_scherm worden oude bronnen en foto's DIRECT schoongeveegd
+    submit_button = st.button("🔍 Voer onderzoek uit", type="primary", use_container_width=True, on_click=reset_scherm)
 with btn_col2:
     stop_button = st.button("⛔ Stop / Annuleer", type="secondary", use_container_width=True)
 
@@ -133,12 +141,6 @@ if submit_button:
     if not onderzoeksvraag.strip():
         st.warning("Voer a.u.b. een onderzoeksvraag in.")
     else:
-        # SCHERM & GEHEUGEN DIRECT SCHOONMAKEN BIJ EEN NIEUWE VRAAG
-        st.session_state.gestopt = False
-        st.session_state.actieve_chat = None
-        st.session_state.chat_historie = []
-        st.session_state.bron_details = []
-        
         # STAP 1: Inhoudsopgave scannen uit Google Sheet
         with st.spinner("Stap 1/3: Inhoudsopgave (Google Sheet) scannen..."):
             try:
@@ -162,7 +164,7 @@ if submit_button:
             geselecteerde_doc_ids = []
 
             # ------------------------------------------------------------------
-            # SLIMME RELEVANTIE-SCORING (WEIGHTED MATCHING)
+            # SLIMME RELEVANTIE-SCORING (WEIGHTED MATCHING + FAMILIE BOOST)
             # ------------------------------------------------------------------
             negeer_woorden = [
                 'geef', 'alle', 'over', 'radio', 'model', 'voor', 'naar', 'van', 'informatie', 
@@ -286,7 +288,7 @@ CRITISCHE SELECTIECRITERIA:
 2. Geef maximaal {max_dossiers} relevante Document_ID's terug.
 3. ALLES OF NIETS: Als er geen enkel dossier specifiek relevant is, antwoord dan UITSLUITEND met het woord: GEEN_MATCH.
 
-Geef UITSLUITEND de exacta Document_ID's terug gescheiden door komma's, OF het woord GEEN_MATCH.
+Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's, OF het woord GEEN_MATCH.
 """
 
                 try:

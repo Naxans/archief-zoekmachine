@@ -14,7 +14,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.1.2"
+APP_VERSION = "v2.1.3"
 APP_DATE = "2026"
 
 # SDK meldingen onderdrukken voor schone logs
@@ -102,12 +102,12 @@ if "start_zoekopdracht" not in st.session_state:
 # ------------------------------------------------------------------------------
 # 3. STREAMLIT INTERFACE
 # ------------------------------------------------------------------------------
-st.set_page_config(page_title="Archief Zoekmachine", page_icon="🔍", layout="wide")
+st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
 # Titel & Versie-informatie
 col_title, col_ver = st.columns([4, 1])
 with col_title:
-    st.title("🔍 Archief Zoekmachine")
+    st.title("🔍 RBC Archief zoekmachine")
 with col_ver:
     st.caption(f"**Versie:** `{APP_VERSION}` ({APP_DATE})")
 

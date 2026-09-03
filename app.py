@@ -105,7 +105,7 @@ else:
     st.stop()
 
 def voer_harde_reset_uit():
-    """Wist geheugen én zet een vlag om direct een schone pagina te forceren."""
+    """Wist geheugen EN dwingt een directe schermherlaad af vóór de verwerking start."""
     st.session_state.gestopt = False
     st.session_state.actieve_chat = None
     st.session_state.chat_historie = []
@@ -126,7 +126,6 @@ with col2:
 # Knoppenbalk met Actie- en Stop-knoppen
 btn_col1, btn_col2 = st.columns([2, 1])
 with btn_col1:
-    # Met on_click=voer_harde_reset_uit worden oude bronnen en foto's DIRECT geschrapt
     submit_button = st.button("🔍 Voer onderzoek uit", type="primary", use_container_width=True, on_click=voer_harde_reset_uit)
 with btn_col2:
     stop_button = st.button("⛔ Stop / Annuleer", type="secondary", use_container_width=True)
@@ -471,43 +470,44 @@ INSTRUCTIES VOOR JE RAPPORT:
         st.session_state.start_zoekopdracht = False
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE BRONNEN MET PREVIEWS & RAPPORT
+# 5. WEERGAVE BRONNEN MET PREVIEWS & RAPPORT (ALLEEN ZICHTBAAR ALS ER DATA IS)
 # ------------------------------------------------------------------------------
-if st.session_state.bron_details:
-    st.subheader("📁 Geselecteerde bronnen & Afbeeldingen:")
-    
-    cols = st.columns(3)
-    for index, bron in enumerate(st.session_state.bron_details):
-        b_naam = bron["naam"]
-        b_id = bron["id"]
+if not st.session_state.start_zoekopdracht:
+    if st.session_state.bron_details:
+        st.subheader("📁 Geselecteerde bronnen & Afbeeldingen:")
         
-        thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w800"
-        drive_view_url = f"https://drive.google.com/file/d/{b_id}/view"
-
-        with cols[index % 3]:
-            with st.expander(f"📄 {b_naam}", expanded=True):
-                st.image(thumbnail_url, caption=b_naam, use_container_width=True)
-                st.link_button("🔍 Open in hoge resolutie", drive_view_url)
-
-if st.session_state.chat_historie:
-    st.divider()
-    st.subheader("📑 Historisch Onderzoeksrapport")
-    
-    for rol, tekst in st.session_state.chat_historie:
-        with st.chat_message(rol):
-            st.write(tekst)
-
-    # Vervolgvragen stellen
-    if vervolgvraag := st.chat_input("Stel een vervolgvraag over dit rapport..."):
-        st.session_state.chat_historie.append(("user", vervolgvraag))
-        with st.chat_message("user"):
-            st.write(vervolgvraag)
+        cols = st.columns(3)
+        for index, bron in enumerate(st.session_state.bron_details):
+            b_naam = bron["naam"]
+            b_id = bron["id"]
             
-        with st.chat_message("assistant"):
-            with st.spinner("Analyseren..."):
-                try:
-                    response = st.session_state.actieve_chat.send_message(vervolgvraag)
-                    st.write(response.text)
-                    st.session_state.chat_historie.append(("assistant", response.text))
-                except Exception as e:
-                    st.error(f"Fout bij verwerken vervolgvraag: {e}")
+            thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w800"
+            drive_view_url = f"https://drive.google.com/file/d/{b_id}/view"
+
+            with cols[index % 3]:
+                with st.expander(f"📄 {b_naam}", expanded=True):
+                    st.image(thumbnail_url, caption=b_naam, use_container_width=True)
+                    st.link_button("🔍 Open in hoge resolutie", drive_view_url)
+
+    if st.session_state.chat_historie:
+        st.divider()
+        st.subheader("📑 Historisch Onderzoeksrapport")
+        
+        for rol, tekst in st.session_state.chat_historie:
+            with st.chat_message(rol):
+                st.write(tekst)
+
+        # Vervolgvragen stellen
+        if vervolgvraag := st.chat_input("Stel een vervolgvraag over dit rapport..."):
+            st.session_state.chat_historie.append(("user", vervolgvraag))
+            with st.chat_message("user"):
+                st.write(vervolgvraag)
+                
+            with st.chat_message("assistant"):
+                with st.spinner("Analyseren..."):
+                    try:
+                        response = st.session_state.actieve_chat.send_message(vervolgvraag)
+                        st.write(response.text)
+                        st.session_state.chat_historie.append(("assistant", response.text))
+                    except Exception as e:
+                        st.error(f"Fout bij verwerken vervolgvraag: {e}")

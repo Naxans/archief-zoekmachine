@@ -133,7 +133,9 @@ if submit_button:
     if not onderzoeksvraag.strip():
         st.warning("Voer a.u.b. een onderzoeksvraag in.")
     else:
+        # SCHERM & GEHEUGEN DIRECT SCHOONMAKEN BIJ EEN NIEUWE VRAAG
         st.session_state.gestopt = False
+        st.session_state.actieve_chat = None
         st.session_state.chat_historie = []
         st.session_state.bron_details = []
         
@@ -184,6 +186,8 @@ if submit_button:
             doc_scores = {}
 
             if zoek_groepen:
+                familie_termen = ['familie', 'stamboom', 'geslacht', 'ouders', 'kinderen', 'echtgenoot', 'echtgenote', 'huwelijk']
+
                 for row in data:
                     doc_id_val = str(row.get('Document_ID', '')).strip()
                     b_naam_val = str(row.get('Bestandsnaam', '')).strip()
@@ -196,7 +200,6 @@ if submit_button:
                     if not gekozen_id:
                         continue
 
-                    # Bereken relevantiescore voor deze rij
                     matched_groepen_count = 0
                     score = 0
                     
@@ -209,6 +212,11 @@ if submit_button:
                     if matched_groepen_count == len(zoek_groepen):
                         score += 10
 
+                    # Extra bonus voor familie- en stamboomdocumenten van de gezochte persoon
+                    if any(v in combi_tekst for grp in zoek_groepen for v in grp if len(v) > 3):
+                        if any(fam_term in combi_tekst for fam_term in familie_termen):
+                            score += 8
+
                     if score > 0:
                         doc_scores[gekozen_id] = doc_scores.get(gekozen_id, 0) + score
 
@@ -216,7 +224,7 @@ if submit_button:
                 gesorteerde_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)
                 geselecteerde_doc_ids = [doc_id for doc_id, score in gesorteerde_docs[:max_dossiers]]
 
-            # 2. Fallback via Gemini als er géén enkele match was
+            # Fallback via Gemini als er géén enkele trefwoord-match was
             if not geselecteerde_doc_ids:
                 dossier_samenvattingen = {}
                 for row in data:

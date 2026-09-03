@@ -108,7 +108,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: geef me alle informatie van de royal record radio model vedette',
+        placeholder='Bijv: wanneer overleed emiel delvoie?',
         height=100
     )
 with col2:
@@ -160,25 +160,40 @@ if submit_button:
 
             geselecteerde_doc_ids = []
 
-            # 1. Strikte directe match: ALLE unieke trefwoorden uit de vraag moeten voorkomen
-            negeer_woorden = ['geef', 'alle', 'over', 'radio', 'model', 'voor', 'naar', 'van', 'informatie', 'weet', 'welke', 'zoek', 'vind', 'wat', 'is', 'de', 'het', 'een']
-            zoekwoorden = [w.lower() for w in onderzoeksvraag.split() if len(w) > 3 and w.lower() not in negeer_woorden]
+            # 1. Slimme trefwoordmatch (inclusief Genoemde Personen & meertalige voornaam-variaties)
+            negeer_woorden = [
+                'geef', 'alle', 'over', 'radio', 'model', 'voor', 'naar', 'van', 'informatie', 
+                'weet', 'welke', 'zoek', 'vind', 'wat', 'is', 'de', 'het', 'een', 'wanneer', 
+                'overleed', 'gestorven', 'waar', 'wie', 'hoe', 'quand', 'où', 'geboren', 'overleden'
+            ]
+            
+            ruwe_woorden = [w.lower() for w in onderzoeksvraag.split() if len(w) > 2 and w.lower() not in negeer_woorden]
+            
+            # Voeg automatische meertalige synoniemen toe voor veelvoorkomende voornamen
+            zoekwoorden = []
+            for w in ruwe_woorden:
+                zoekwoorden.append(w)
+                if w == 'emiel': zoekwoorden.append('emile')
+                elif w == 'emile': zoekwoorden.append('emiel')
+                elif w == 'jan': zoekwoorden.append('jean')
+                elif w == 'jean': zoekwoorden.append('jan')
 
             if zoekwoorden:
                 for row in data:
                     doc_id_val = str(row.get('Document_ID', '')).strip()
                     b_naam_val = str(row.get('Bestandsnaam', '')).strip()
+                    personen_val = str(row.get('Genoemde Personen', '') or row.get('Genoemde personen', '')).strip()
                     inhoud_val = str(row.get('Inhoud & Cijfers (NL)', '') or row.get('Inhoud & cijfers (NL)', '') or row.get('Inhoud', '')).strip()
                     
-                    combi_tekst = f"{doc_id_val} {b_naam_val} {inhoud_val}".lower()
+                    combi_tekst = f"{doc_id_val} {b_naam_val} {personen_val} {inhoud_val}".lower()
                     
-                    # ALLE unieke zoekwoorden moeten voorkomen in de rij (strikte filter)
-                    if all(woord in combi_tekst for woord in zoekwoorden):
+                    # Match wanneer minstens één van de specifieke zoekwoorden/namen voorkomt
+                    if any(woord in combi_tekst for woord in zoekwoorden):
                         gekozen_id = doc_id_val if doc_id_val else f"SINGLE_{b_naam_val}"
                         if gekozen_id and gekozen_id not in geselecteerde_doc_ids:
                             geselecteerde_doc_ids.append(gekozen_id)
 
-            # 2. Zoek via Gemini naar relevante Document_ID's als er geen strikte trefwoordmatch was
+            # 2. Zoek via Gemini naar relevante Document_ID's als er geen directe trefwoordmatch was
             if not geselecteerde_doc_ids:
                 dossier_samenvattingen = {}
                 for row in data:
@@ -196,12 +211,14 @@ if submit_button:
                         }
                     
                     dossier_samenvattingen[doc_id]["Paginas"] += 1
-                    if row.get('Genoemde Personen'):
-                        dossier_samenvattingen[doc_id]["Personen"].add(str(row.get('Genoemde Personen')).strip())
+                    
+                    pers_val = row.get('Genoemde Personen') or row.get('Genoemde personen')
+                    if pers_val:
+                        dossier_samenvattingen[doc_id]["Personen"].add(str(pers_val).strip())
+                        
                     if row.get('Onderwerp (NL)'):
                         dossier_samenvattingen[doc_id]["Onderwerpen"].add(str(row.get('Onderwerp (NL)')).strip())
                     
-                    # Flexibele uitlezing van Inhoudskolom
                     inhoud_val = (
                         row.get('Inhoud & Cijfers (NL)') or 
                         row.get('Inhoud & cijfers (NL)') or 
@@ -238,14 +255,13 @@ CRITISCHE SELECTIECRITERIA:
 2. Geef maximaal {max_dossiers} relevante Document_ID's terug.
 3. ALLES OF NIETS: Als er absoluut GEEN enkel dossier relevant is voor deze zoekopdracht, antwoord dan UITSLUITEND met het woord: GEEN_MATCH.
 
-Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's, OF het woord GEEN_MATCH. Geen extra uitleg of beleefdheid zinnen.
+Geef UITSLUITEND de exacta Document_ID's terug gescheiden door komma's, OF het woord GEEN_MATCH. Geen extra uitleg of beleefdheid zinnen.
 """
 
                 try:
                     res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
                     raw_text = res_filter.text.strip()
                     
-                    # Controleer op negatieve/lege antwoorden van Gemini
                     negatieve_termen = ["geen_match", "geen resultaten", "geen documenten", "niets gevonden"]
                     if any(term in raw_text.lower() for term in negatieve_termen):
                         geselecteerde_doc_ids = []

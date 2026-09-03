@@ -10,6 +10,12 @@ from googleapiclient.discovery import build
 from google import genai
 from google.genai import types
 
+# ------------------------------------------------------------------------------
+# APP VERSIEBEHEER
+# ------------------------------------------------------------------------------
+APP_VERSION = "v2.1.0"
+APP_DATE = "2026"
+
 # SDK meldingen onderdrukken voor schone logs
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
@@ -96,7 +102,13 @@ if "start_zoekopdracht" not in st.session_state:
 # 3. STREAMLIT INTERFACE & SCHERM-RESET LOGICA
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="Archief Zoekmachine", page_icon="🔍", layout="wide")
-st.title("🔍 Archief Zoekmachine")
+
+# Titel & Versie-informatie
+col_title, col_ver = st.columns([4, 1])
+with col_title:
+    st.title("🔍 Archief Zoekmachine")
+with col_ver:
+    st.caption(f"**Versie:** `{APP_VERSION}` ({APP_DATE})")
 
 if MODEL_NAAM:
     st.caption(f"Actief AI-model: `{MODEL_NAAM}`")
@@ -470,7 +482,7 @@ INSTRUCTIES VOOR JE RAPPORT:
         st.session_state.start_zoekopdracht = False
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE BRONNEN MET PREVIEWS & RAPPORT (ALLEEN ZICHTBAAR ALS ER DATA IS)
+# 5. WEERGAVE BRONNEN MET PREVIEWS & RAPPORT
 # ------------------------------------------------------------------------------
 if not st.session_state.start_zoekopdracht:
     if st.session_state.bron_details:

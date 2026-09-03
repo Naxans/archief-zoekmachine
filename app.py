@@ -14,7 +14,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.1.1"
+APP_VERSION = "v2.1.2"
 APP_DATE = "2026"
 
 # SDK meldingen onderdrukken voor schone logs
@@ -100,7 +100,7 @@ if "start_zoekopdracht" not in st.session_state:
     st.session_state.start_zoekopdracht = False
 
 # ------------------------------------------------------------------------------
-# 3. STREAMLIT INTERFACE & SCHERM-RESET LOGICA
+# 3. STREAMLIT INTERFACE
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="Archief Zoekmachine", page_icon="🔍", layout="wide")
 
@@ -117,14 +117,6 @@ else:
     st.error("Kon geen werkend Gemini-model vinden voor deze API-sleutel. Controleer je Gemini API key.")
     st.stop()
 
-def voer_harde_reset_uit():
-    """Wist geheugen EN dwingt een directe schermherlaad af vóór de verwerking start."""
-    st.session_state.gestopt = False
-    st.session_state.actieve_chat = None
-    st.session_state.chat_historie = []
-    st.session_state.bron_details = []
-    st.session_state.start_zoekopdracht = True
-
 # Invoer van de onderzoeksvraag & parameters
 col1, col2 = st.columns([3, 1])
 with col1:
@@ -139,9 +131,18 @@ with col2:
 # Knoppenbalk met Actie- en Stop-knoppen
 btn_col1, btn_col2 = st.columns([2, 1])
 with btn_col1:
-    submit_button = st.button("🔍 Voer onderzoek uit", type="primary", use_container_width=True, on_click=voer_harde_reset_uit)
+    submit_button = st.button("🔍 Voer onderzoek uit", type="primary", use_container_width=True)
 with btn_col2:
     stop_button = st.button("⛔ Stop / Annuleer", type="secondary", use_container_width=True)
+
+# LEEGMAKEN EN SCHERM RESETTEN BIJ KLIK OP ZOEKEN
+if submit_button:
+    st.session_state.gestopt = False
+    st.session_state.actieve_chat = None
+    st.session_state.chat_historie = []
+    st.session_state.bron_details = []
+    st.session_state.start_zoekopdracht = True
+    st.rerun()  # Dwingt een directe, schone schermverversing af
 
 # Directe stop-afhandeling
 if stop_button:
@@ -193,7 +194,7 @@ if st.session_state.start_zoekopdracht:
                 'dossier', 'document', 'archief', 'toon', 'laat', 'zien', 'hebt', 'gehad', 'expliciet'
             ]
             
-            # Verwijder leestekens (zoals ?, ., ,) uit de vraag voor schone matches
+            # Verwijder leestekens uit de vraag voor schone matches
             schoon_vraag = onderzoeksvraag.translate(str.maketrans('', '', string.punctuation))
             ruwe_woorden = [w.lower() for w in schoon_vraag.split() if len(w) > 2 and w.lower() not in negeer_woorden]
             

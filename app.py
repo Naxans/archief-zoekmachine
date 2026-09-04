@@ -104,7 +104,7 @@ if "start_zoekopdracht" not in st.session_state:
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
-# ZIJBALK: Overzichtelijk met uitklapbare help-secties
+# ZIJBALK: Overzichtelijk met uitklapbare help-secties (ZONDER VERSENUMMER ONDERAAN)
 with st.sidebar:
     st.title("ℹ️ Help & Info")
     
@@ -131,11 +131,8 @@ with st.sidebar:
         
         *Omdat de resultaten en AI-analyses soms nog niet 100% nauwkeurig zijn, zullen we ons digitaal archief en de indexering de komende tijd stapsgewijs verder verbeteren. Jouw feedback als expert is daarbij enorm waardevol!*
         """)
-        
-    st.divider()
-    st.caption(f"Versie: `{APP_VERSION}` ({APP_DATE})")
 
-# Titel & Versie-informatie op de hoofdpagina
+# Titel & Versie-informatie op de hoofdpagina (rechterbovenhoek)
 col_title, col_ver = st.columns([4, 1])
 with col_title:
     st.title("🔍 RBC Archief zoekmachine")

@@ -14,7 +14,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.1.6"
+APP_VERSION = "v2.2.0"
 APP_DATE = "2026"
 
 # SDK meldingen onderdrukken voor schone logs
@@ -119,14 +119,10 @@ with st.sidebar:
 
     with st.expander("💡 Tips voor het testen"):
         st.markdown("""
-        * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken (zoals *"Geef alle informatie over RBC"*). Bij een te brede vraag worden er erg veel documenten gevonden. Vragen naar specifieke namen, jaartallen of onderwerpen werken het snelst en het beste.
+        * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken (zoals *"Geef alle informatie over RBC"*). Bij een te brede vraag worden er erg veel documenten gevonden. Vragen naar specifieke namen, jaartallen, boekboektitels of onderwerpen werken het snelst en het beste.
         * **Knop 'Voer onderzoek uit':** Hiermee start je de zoekopdracht. De AI gaat dan direct de relevante documenten en afbeeldingen analyseren.
         * **Knop 'Stop / Annuleer':** Mocht een zoekopdracht te lang duren of wil je halverwege stoppen, dan kun je hiermee het proces meteen afbreken.
-        * **Schuifregelaar 'Max dossiers (Document_ID's)':** Hiermee bepaal je hoeveel verschillende archiefmappen/documenten de AI maximaal mag bekijken.
-          * *Laag (5 tot 10):* Ideaal voor snelle vragen. De AI is sneller klaar en gebruikt minder capaciteit.
-          * *Hoog (15 tot 25):* Handig voor ingewikkelde vragen waarbij de informatie verspreid kan liggen over meerdere documenten. Het analyseren duurt dan wel wat langer.
-        
-        *Omdat de resultaten en AI-analyses soms nog niet 100% nauwkeurig zijn, zullen we ons digitaal archief en de indexering de komende tijd stapsgewijs verder verbeteren. Jouw feedback als expert is daarbij enorm waardevol!*
+        * **Schuifregelaar 'Max dossiers (Document_ID's)':** Hiermee bepaal je hoeveel verschillende archiefmappen/boeken de AI maximaal mag bekijken.
         """)
 
 # Titel & Versie-informatie op de hoofdpagina (rechterbovenhoek)
@@ -147,7 +143,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: wanneer overleed emiel delvoie?',
+        placeholder='Bijv: Wat staat er in het boek van Mathieu Rutten over de elektriciteitscentrale van Tongeren?',
         height=100
     )
 with col2:
@@ -167,7 +163,7 @@ if submit_button:
     st.session_state.chat_historie = []
     st.session_state.bron_details = []
     st.session_state.start_zoekopdracht = True
-    st.rerun()  # Dwingt een directe, schone schermverversing af
+    st.rerun()
 
 # Directe stop-afhandeling
 if stop_button:
@@ -210,16 +206,16 @@ if st.session_state.start_zoekopdracht:
             geselecteerde_doc_ids = []
 
             # ------------------------------------------------------------------
-            # SLIMME RELEVANTIE-SCORING (WEIGHTED MATCHING + FAMILIE BOOST)
+            # SLIMME RELEVANTIE-SCORING (WEIGHTED MATCHING + BOEK & FAMILIE BOOST)
             # ------------------------------------------------------------------
             negeer_woorden = [
                 'geef', 'alle', 'over', 'radio', 'model', 'voor', 'naar', 'van', 'informatie', 
                 'weet', 'welke', 'zoek', 'vind', 'wat', 'is', 'de', 'het', 'een', 'wanneer', 
                 'overleed', 'gestorven', 'waar', 'wie', 'hoe', 'quand', 'où', 'geboren', 'overleden',
-                'dossier', 'document', 'archief', 'toon', 'laat', 'zien', 'hebt', 'gehad', 'expliciet'
+                'dossier', 'document', 'archief', 'toon', 'laat', 'zien', 'hebt', 'gehad', 'expliciet',
+                'boek', 'publicatie', 'staan', 'vertel', 'me'
             ]
             
-            # Verwijder leestekens uit de vraag voor schone matches
             schoon_vraag = onderzoeksvraag.translate(str.maketrans('', '', string.punctuation))
             ruwe_woorden = [w.lower() for w in schoon_vraag.split() if len(w) > 2 and w.lower() not in negeer_woorden]
             
@@ -235,15 +231,16 @@ if st.session_state.start_zoekopdracht:
             doc_scores = {}
 
             if zoek_groepen:
-                familie_termen = ['familie', 'stamboom', 'geslacht', 'ouders', 'kinderen', 'echtgenoot', 'echtgenote', 'huwelijk']
+                familie_termen = ['familie', 'stamboom', 'geslacht', 'ouders', 'kinderen', 'echtgenoot', 'echtgenote', 'huwelijk', 'boek', 'auteur']
 
                 for row in data:
                     doc_id_val = str(row.get('Document_ID', '')).strip()
                     b_naam_val = str(row.get('Bestandsnaam', '')).strip()
                     personen_val = str(row.get('Genoemde Personen', '') or row.get('Genoemde personen', '')).strip()
+                    onderwerp_val = str(row.get('Onderwerp (NL)', '') or row.get('Onderwerp', '')).strip()
                     inhoud_val = str(row.get('Inhoud & Cijfers (NL)', '') or row.get('Inhoud & cijfers (NL)', '') or row.get('Inhoud', '')).strip()
                     
-                    combi_tekst = f"{doc_id_val} {b_naam_val} {personen_val} {inhoud_val}".lower()
+                    combi_tekst = f"{doc_id_val} {b_naam_val} {personen_val} {onderwerp_val} {inhoud_val}".lower()
                     
                     gekozen_id = doc_id_val if doc_id_val else f"SINGLE_{b_naam_val}"
                     if not gekozen_id:
@@ -255,13 +252,11 @@ if st.session_state.start_zoekopdracht:
                     for grp in zoek_groepen:
                         if any(v in combi_tekst for v in grp):
                             matched_groepen_count += 1
-                            score += 5  # Basisscore per match
+                            score += 5
 
-                    # Extra bonus als álle zoekwoorden in de rij staan
                     if matched_groepen_count == len(zoek_groepen):
                         score += 10
 
-                    # Extra bonus voor familie- en stamboomdocumenten van de gezochte persoon
                     if any(v in combi_tekst for grp in zoek_groepen for v in grp if len(v) > 3):
                         if any(fam_term in combi_tekst for fam_term in familie_termen):
                             score += 8
@@ -269,11 +264,10 @@ if st.session_state.start_zoekopdracht:
                     if score > 0:
                         doc_scores[gekozen_id] = doc_scores.get(gekozen_id, 0) + score
 
-                # Sorteer op hoogste score en pak de beste resultaten
                 gesorteerde_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)
                 geselecteerde_doc_ids = [doc_id for doc_id, score in gesorteerde_docs[:max_dossiers]]
 
-            # Fallback via Gemini als er géén enkele trefwoord-match was
+            # Fallback via Gemini bij geen directe matches
             if not geselecteerde_doc_ids:
                 dossier_samenvattingen = {}
                 for row in data:
@@ -331,11 +325,11 @@ Jij bent een zeer strenge en nauwkeurige hoofdarchivaris. Hieronder staat een ov
 ONDERZOEKSVRAAG: "{onderzoeksvraag}"
 
 CRITISCHE SELECTIECRITERIA:
-1. Selecteer UITSLUITEND dossiers (Document_ID's) die DIRECT te maken hebben met de specifieke personen, merken of specifieke vragen.
+1. Selecteer UITSLUITEND dossiers (Document_ID's) die DIRECT te maken hebben met de specifieke personen, boeken, merken of vragen.
 2. Geef maximaal {max_dossiers} relevante Document_ID's terug.
 3. ALLES OF NIETS: Als er geen enkel dossier specifiek relevant is, antwoord dan UITSLUITEND met het woord: GEEN_MATCH.
 
-Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's, OF het woord GEEN_MATCH.
+Geef UITSLUITEND de exacta Document_ID's terug gescheiden door komma's, OF het woord GEEN_MATCH.
 """
 
                 try:
@@ -353,147 +347,175 @@ Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's, OF het w
                     st.stop()
 
         if not geselecteerde_doc_ids:
-            st.warning("⚠️ Geen relevante documenten gevonden in het archief voor deze zoekopdracht.")
+            st.warning("⚠️ Geen relevante documenten of boeken gevonden in het archief voor deze zoekopdracht.")
             st.session_state.start_zoekopdracht = False
             st.stop()
 
-        # STAP 1.5: Verzamel ALLE bestanden die bij de geselecteerde Document_ID's horen
+        # STAP 1.5: Verzamel alle gekoppelde bestanden en gegevens per dossier uit de Sheet
         eind_bestanden_lijst = []
+        sheet_dossier_data = []  # Bewaart complete Sheet-tekst voor boeken/grote dossiers
+
         for row in data:
             doc_id = str(row.get('Document_ID', '')).strip()
             b_naam = str(row.get('Bestandsnaam', '')).strip()
 
             if any(doc_id.lower() == g_id.lower() or b_naam.lower() == g_id.lower() for g_id in geselecteerde_doc_ids):
+                sheet_dossier_data.append(row)
                 if b_naam and b_naam not in eind_bestanden_lijst:
                     eind_bestanden_lijst.append(b_naam)
 
         # DEBUG MELDING: Details van geselecteerde documenten
         with st.expander("🔍 Bekijk details van de geselecteerde documenten uit de Sheet", expanded=True):
             st.write(f"**Geselecteerde Document_ID's ({len(geselecteerde_doc_ids)}):** `{geselecteerde_doc_ids}`")
-            st.write(f"**Gevonden bestandsnamen ({len(eind_bestanden_lijst)}):** `{eind_bestanden_lijst}`")
+            st.write(f"**Aantal gekoppelde pagina's/bestanden ({len(eind_bestanden_lijst)}):** `{len(eind_bestanden_lijst)} items`")
 
-        if not eind_bestanden_lijst:
-            st.error("Document_ID's zijn geselecteerd, maar er staan geen geldige bestandsnamen gekoppeld aan deze ID's in de Google Sheet.")
+        if not eind_bestanden_lijst and not sheet_dossier_data:
+            st.error("Geen geldige bestanden gekoppeld aan de geselecteerde ID's in de Google Sheet.")
             st.session_state.start_zoekopdracht = False
             st.stop()
 
-        # STAP 2: Originele documenten ophalen uit Google Drive
-        with st.spinner(f"Stap 2/3: Originele bestanden ophalen uit Drive ({len(eind_bestanden_lijst)} bestanden verzameld)..."):
-            onderzoeks_payload = [
-                f"""Jij bent een financieel-historisch expert en archivaris.
-Beantwoord onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de meegeleverde originele archiefstukken.
+        # STAP 2 & 3: Slimme verwerking afhankelijk van de grootte van de geselecteerde dossiers
+        MAX_FOTO_LIMIET = 10  # Als een dossier/boek meer dan 10 pagina's heeft, gebruiken we de Sheet-teksten
+
+        onderzoeks_payload = [
+            f"""Jij bent een financieel-historisch expert en archivaris.
+Beantwoord onderstaande onderzoeksvraag grondig, helder en gedetailleerd op basis van het beschikbare materiaal.
 
 ONDERZOEKSVRAAG: {onderzoeksvraag}
 
 INSTRUCTIES VOOR JE RAPPORT:
-1. Richt je specifiek op de gevraagde firma, personen, modellen en periode.
-2. Structureer je antwoord helder.
-3. Vermeld alle concrete namen, functies, cijfers en details die op de documenten staan.
-4. Citeer steeds de bestandsnaam (bijv. 'document.pdf' of 'foto.jpg') wanneer je naar specifieke informatie verwijst.
-5. Trek een heldere conclusie als antwoord op de vraag.
+1. Richt je specifiek op de gevraagde firma, personen, boeken, modellen en periode.
+2. Structureer je antwoord helder met duidelijke kopjes.
+3. Vermeld alle concrete namen, functies, cijfers, paginanummers en historische feiten.
+4. Trek een duidelijke, gedetailleerde conclusie als antwoord op de vraag.
 """
-            ]
+        ]
 
-            geladen_aantal = 0
-            missing_files = []
+        if len(eind_bestanden_lijst) > MAX_FOTO_LIMIET:
+            # GROOT DOSSIER / BOEK: Gebruik de rijke Sheet-data voor razendsnelle analyse
+            with st.spinner(f"Stap 2/3: Groot dossier/boek gedetecteerd ({len(eind_bestanden_lijst)} pagina's). Gegevens bundelen uit Sheet..."):
+                tekst_gebundeld = f"\n--- DOSSIER INHOUD (TOTAAL {len(sheet_dossier_data)} PAGINA'S/RIJEN UIT SHEET) ---\n"
+                for idx, r in enumerate(sheet_dossier_data, start=1):
+                    doc_id = r.get('Document_ID', '')
+                    b_naam = r.get('Bestandsnaam', '')
+                    datum = r.get('Datum Document', '')
+                    personen = r.get('Genoemde Personen') or r.get('Genoemde personen', '')
+                    onderwerp = r.get('Onderwerp (NL)', '')
+                    inhoud = r.get('Inhoud & Cijfers (NL)') or r.get('Inhoud & cijfers (NL)') or r.get('Inhoud', '')
+                    
+                    tekst_gebundeld += f"\n[Pagina/Item {idx}] Bestand: {b_naam} | Doc_ID: {doc_id} | Datum: {datum}\n"
+                    if personen: tekst_gebundeld += f"  - Personen: {personen}\n"
+                    if onderwerp: tekst_gebundeld += f"  - Onderwerp: {onderwerp}\n"
+                    if inhoud: tekst_gebundeld += f"  - Inhoud & Details: {inhoud}\n"
 
-            for b_naam in eind_bestanden_lijst:
-                if st.session_state.gestopt:
-                    st.warning("Onderzoek geannuleerd bij het ophalen van bestanden.")
-                    st.session_state.start_zoekopdracht = False
-                    st.stop()
-
-                b_naam_schoon = str(b_naam).strip("'\" ")
-                if ":" in b_naam_schoon:
-                    b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
+                onderzoeks_payload.append(tekst_gebundeld)
                 
-                basis_naam = b_naam_schoon.split('/')[-1]
-                naam_zonder_ext = basis_naam.rsplit('.', 1)[0] if '.' in basis_naam else basis_naam
+                # Bewaart eerste pagina als visuele referentie
+                if eind_bestanden_lijst:
+                    eerste_bestand = eind_bestanden_lijst[0]
+                    query_ref = f"name = '{eerste_bestand}' and trashed = false"
+                    res_ref = drive_service.files().list(q=query_ref, fields='files(id, name, mimeType)').execute().get('files', [])
+                    if res_ref:
+                        st.session_state.bron_details.append({
+                            "naam": res_ref[0]['name'],
+                            "id": res_ref[0]['id'],
+                            "mime": res_ref[0]['mimeType']
+                        })
 
-                bestanden = []
+        else:
+            # KLEIN DOSSIER: Haal originele afbeeldingen/PDF's op uit Drive
+            with st.spinner(f"Stap 2/3: Originele bestanden ophalen uit Drive ({len(eind_bestanden_lijst)} bestanden)..."):
+                geladen_aantal = 0
+                missing_files = []
 
-                # 1. Exacte naam
-                query1 = f"name = '{b_naam_schoon}' and trashed = false"
-                res1 = drive_service.files().list(q=query1, fields='files(id, name, mimeType)').execute()
-                bestanden = res1.get('files', [])
+                for b_naam in eind_bestanden_lijst:
+                    if st.session_state.gestopt:
+                        st.warning("Onderzoek geannuleerd bij het ophalen van bestanden.")
+                        st.session_state.start_zoekopdracht = False
+                        st.stop()
 
-                # 2. Basisnaam
-                if not bestanden and basis_naam != b_naam_schoon:
-                    query2 = f"name = '{basis_naam}' and trashed = false"
-                    res2 = drive_service.files().list(q=query2, fields='files(id, name, mimeType)').execute()
-                    bestanden = res2.get('files', [])
+                    b_naam_schoon = str(b_naam).strip("'\" ")
+                    if ":" in b_naam_schoon:
+                        b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
+                    
+                    basis_naam = b_naam_schoon.split('/')[-1]
+                    naam_zonder_ext = basis_naam.rsplit('.', 1)[0] if '.' in basis_naam else basis_naam
 
-                # 3. Zoek op gedeeltelijke naam (contains)
-                if not bestanden and len(naam_zonder_ext) > 1:
-                    query3 = f"name contains '{naam_zonder_ext}' and trashed = false"
-                    res3 = drive_service.files().list(q=query3, fields='files(id, name, mimeType)').execute()
-                    bestanden = res3.get('files', [])
+                    bestanden = []
+                    query1 = f"name = '{b_naam_schoon}' and trashed = false"
+                    res1 = drive_service.files().list(q=query1, fields='files(id, name, mimeType)').execute()
+                    bestanden = res1.get('files', [])
 
-                if bestanden:
-                    f = bestanden[0]
-                    b_id = f['id']
-                    b_mime = f['mimeType']
-                    b_real_naam = f['name']
+                    if not bestanden and basis_naam != b_naam_schoon:
+                        query2 = f"name = '{basis_naam}' and trashed = false"
+                        res2 = drive_service.files().list(q=query2, fields='files(id, name, mimeType)').execute()
+                        bestanden = res2.get('files', [])
 
-                    st.session_state.bron_details.append({
-                        "naam": b_real_naam,
-                        "id": b_id,
-                        "mime": b_mime
-                    })
+                    if not bestanden and len(naam_zonder_ext) > 1:
+                        query3 = f"name contains '{naam_zonder_ext}' and trashed = false"
+                        res3 = drive_service.files().list(q=query3, fields='files(id, name, mimeType)').execute()
+                        bestanden = res3.get('files', [])
 
-                    try:
-                        if b_mime == 'application/vnd.google-apps.document':
-                            req = drive_service.files().export_media(fileId=b_id, mimeType='text/plain')
-                            doc_txt = req.execute().decode('utf-8', errors='ignore')
-                            onderzoeks_payload.append(f"\n--- INHOUD GOOGLE DOC ({b_real_naam}) ---\n{doc_txt}")
-                        
-                        elif b_mime == 'application/pdf' or b_real_naam.lower().endswith('.pdf'):
-                            req = drive_service.files().get_media(fileId=b_id)
-                            pdf_bytes = req.execute()
+                    if bestanden:
+                        f = bestanden[0]
+                        b_id = f['id']
+                        b_mime = f['mimeType']
+                        b_real_naam = f['name']
 
-                            pdf_part = types.Part.from_bytes(
-                                data=pdf_bytes,
-                                mime_type='application/pdf'
-                            )
-                            onderzoeks_payload.append(f"\n--- ORIGINELE PDF: {b_real_naam} ---")
-                            onderzoeks_payload.append(pdf_part)
+                        st.session_state.bron_details.append({
+                            "naam": b_real_naam,
+                            "id": b_id,
+                            "mime": b_mime
+                        })
 
-                        else:
-                            req = drive_service.files().get_media(fileId=b_id)
-                            f_data = req.execute()
-
-                            img = Image.open(io.BytesIO(f_data))
-                            if img.mode != 'RGB':
-                                img = img.convert('RGB')
+                        try:
+                            if b_mime == 'application/vnd.google-apps.document':
+                                req = drive_service.files().export_media(fileId=b_id, mimeType='text/plain')
+                                doc_txt = req.execute().decode('utf-8', errors='ignore')
+                                onderzoeks_payload.append(f"\n--- INHOUD GOOGLE DOC ({b_real_naam}) ---\n{doc_txt}")
                             
-                            img.thumbnail((800, 800))
+                            elif b_mime == 'application/pdf' or b_real_naam.lower().endswith('.pdf'):
+                                req = drive_service.files().get_media(fileId=b_id)
+                                pdf_bytes = req.execute()
 
-                            img_byte_arr = io.BytesIO()
-                            img.save(img_byte_arr, format='JPEG', quality=70)
+                                pdf_part = types.Part.from_bytes(
+                                    data=pdf_bytes,
+                                    mime_type='application/pdf'
+                                )
+                                onderzoeks_payload.append(f"\n--- ORIGINELE PDF: {b_real_naam} ---")
+                                onderzoeks_payload.append(pdf_part)
 
-                            img_part = types.Part.from_bytes(
-                                data=img_byte_arr.getvalue(),
-                                mime_type='image/jpeg'
-                            )
-                            onderzoeks_payload.append(f"\n--- ORIGINELE AFBEELDING: {b_real_naam} ---")
-                            onderzoeks_payload.append(img_part)
+                            else:
+                                req = drive_service.files().get_media(fileId=b_id)
+                                f_data = req.execute()
 
-                        geladen_aantal += 1
-                    except Exception as e:
-                        st.warning(f"Kon {b_real_naam} niet laden: {e}")
-                else:
-                    missing_files.append(b_naam_schoon)
+                                img = Image.open(io.BytesIO(f_data))
+                                if img.mode != 'RGB':
+                                    img = img.convert('RGB')
+                                
+                                img.thumbnail((800, 800))
 
-        if missing_files:
-            st.warning(f"⚠️ De volgende bestanden uit de Sheet konden niet op Drive worden gevonden: {missing_files}")
+                                img_byte_arr = io.BytesIO()
+                                img.save(img_byte_arr, format='JPEG', quality=70)
 
-        if geladen_aantal == 0:
-            st.error("Geen van de geselecteerde bestanden kon worden teruggevonden in Google Drive.")
-            st.session_state.start_zoekopdracht = False
-            st.stop()
+                                img_part = types.Part.from_bytes(
+                                    data=img_byte_arr.getvalue(),
+                                    mime_type='image/jpeg'
+                                )
+                                onderzoeks_payload.append(f"\n--- ORIGINELE AFBEELDING: {b_real_naam} ---")
+                                onderzoeks_payload.append(img_part)
 
-        # STAP 3: Analyse uitvoeren via Gemini
-        with st.spinner("Stap 3/3: Analyse uitvoeren via Gemini..."):
+                            geladen_aantal += 1
+                        except Exception as e:
+                            st.warning(f"Kon {b_real_naam} niet laden: {e}")
+                    else:
+                        missing_files.append(b_naam_schoon)
+
+                if missing_files:
+                    st.warning(f"⚠️ De volgende bestanden uit de Sheet kon de app niet in Google Drive vinden: {missing_files}")
+
+        # STAP 3: AI-analyse door Gemini
+        with st.spinner("Stap 3/3: Historische analyse uitvoeren via Gemini..."):
             if st.session_state.gestopt:
                 st.warning("Onderzoek geannuleerd voor de AI-analyse.")
                 st.session_state.start_zoekopdracht = False
@@ -514,7 +536,7 @@ INSTRUCTIES VOOR JE RAPPORT:
 # ------------------------------------------------------------------------------
 if not st.session_state.start_zoekopdracht:
     if st.session_state.bron_details:
-        st.subheader("📁 Geselecteerde bronnen & Afbeeldingen:")
+        st.subheader("📁 Geselecteerde bronnen / Omslag:")
         
         cols = st.columns(3)
         for index, bron in enumerate(st.session_state.bron_details):
@@ -527,7 +549,7 @@ if not st.session_state.start_zoekopdracht:
             with cols[index % 3]:
                 with st.expander(f"📄 {b_naam}", expanded=True):
                     st.image(thumbnail_url, caption=b_naam, use_container_width=True)
-                    st.link_button("🔍 Open in hoge resolutie", drive_view_url)
+                    st.link_button("🔍 Open origineel in Google Drive", drive_view_url)
 
     if st.session_state.chat_historie:
         st.divider()
@@ -538,7 +560,7 @@ if not st.session_state.start_zoekopdracht:
                 st.write(tekst)
 
         # Vervolgvragen stellen
-        if vervolgvraag := st.chat_input("Stel een vervolgvraag over dit rapport..."):
+        if vervolgvraag := st.chat_input("Stel een vervolgvraag over dit rapport of boek..."):
             st.session_state.chat_historie.append(("user", vervolgvraag))
             with st.chat_message("user"):
                 st.write(vervolgvraag)

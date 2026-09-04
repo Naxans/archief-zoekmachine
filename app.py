@@ -14,7 +14,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.2.1"
+APP_VERSION = "v2.3.0"
 APP_DATE = "2026"
 
 # SDK meldingen onderdrukken voor schone logs
@@ -94,6 +94,10 @@ if "chat_historie" not in st.session_state:
     st.session_state.chat_historie = []
 if "bron_details" not in st.session_state:
     st.session_state.bron_details = []
+if "blader_paginas" not in st.session_state:
+    st.session_state.blader_paginas = []
+if "huidige_pagina_index" not in st.session_state:
+    st.session_state.huidige_pagina_index = 0
 if "gestopt" not in st.session_state:
     st.session_state.gestopt = False
 if "start_zoekopdracht" not in st.session_state:
@@ -119,10 +123,10 @@ with st.sidebar:
 
     with st.expander("💡 Tips voor het testen"):
         st.markdown("""
-        * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken (zoals *"Geef alle informatie over RBC"*). Bij een te brede vraag worden er erg veel documenten gevonden. Vragen naar specifieke namen, jaartallen, boektitels of onderwerpen werken het snelst en het beste.
-        * **Knop 'Voer onderzoek uit':** Hiermee start je de zoekopdracht. De AI gaat dan direct de relevante documenten en afbeeldingen analyseren.
-        * **Knop 'Stop / Annuleer':** Mocht een zoekopdracht te lang duren of wil je halverwege stoppen, dan kun je hiermee het proces meteen afbreken.
-        * **Schuifregelaar 'Max dossiers (Document_ID's)':** Hiermee bepaal je hoeveel verschillende archiefmappen/boeken de AI maximaal mag bekijken.
+        * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken. Vragen naar specifieke namen, jaartallen, boektitels of onderwerpen werken het snelst.
+        * **Knop 'Voer onderzoek uit':** Hiermee start je de zoekopdracht.
+        * **Knop 'Stop / Annuleer':** Mocht een zoekopdracht te lang duren, dan kun je hiermee het proces meteen afbreken.
+        * **Bladeren door pagina's:** Onder het zoekresultaat kun je met de knoppen '◀ Vorige' en 'Volgende ▶' rechtstreeks door de pagina's van het geselecteerde boek bladeren!
         """)
 
 # Titel & Versie-informatie op de hoofdpagina
@@ -162,6 +166,8 @@ if submit_button:
     st.session_state.actieve_chat = None
     st.session_state.chat_historie = []
     st.session_state.bron_details = []
+    st.session_state.blader_paginas = []
+    st.session_state.huidige_pagina_index = 0
     st.session_state.start_zoekopdracht = True
     st.rerun()
 
@@ -329,7 +335,7 @@ CRITISCHE SELECTIECRITERIA:
 2. Geef maximaal {max_dossiers} relevante Document_ID's terug.
 3. ALLES OF NIETS: Als er geen enkel dossier specifiek relevant is, antwoord dan UITSLUITEND met het woord: GEEN_MATCH.
 
-Geef UITSLUITEND de exacta Document_ID's terug gescheiden door komma's, OF het woord GEEN_MATCH.
+Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's, OF het woord GEEN_MATCH.
 """
 
                 try:
@@ -409,35 +415,38 @@ INSTRUCTIES VOOR JE RAPPORT:
                     if inhoud: tekst_gebundeld += f"  - Inhoud & Details: {inhoud}\n"
 
                 onderzoeks_payload.append(tekst_gebundeld)
-                
+
                 # --------------------------------------------------------------
-                # VERBETERDE OMSLAG-SELECTIE: PAKT SPECIFIEK HET ALLEREERSTE BESTAND
-                # VAN HET HOOGST SCORENDE DOSSIER (BIJV. DE OMSLAG VAN DOC_0001)
+                # VERZAMEL ALLE PAGINA'S VAN HET TOP-DOSSIER VOOR BLADERFUNCTIE
                 # --------------------------------------------------------------
                 top_doc_id = geselecteerde_doc_ids[0] if geselecteerde_doc_ids else None
-                eerste_bestand = None
+                top_dossier_bestanden = []
 
                 if top_doc_id:
                     for r in sheet_dossier_data:
                         d_id = str(r.get('Document_ID', '')).strip()
                         b_n = str(r.get('Bestandsnaam', '')).strip()
-                        if d_id.lower() == top_doc_id.lower() and b_n:
-                            eerste_bestand = b_n
-                            break
+                        if d_id.lower() == top_doc_id.lower() and b_n and b_n not in top_dossier_bestanden:
+                            top_dossier_bestanden.append(b_n)
 
-                if not eerste_bestand and eind_bestanden_lijst:
-                    eerste_bestand = eind_bestanden_lijst[0]
+                if not top_dossier_bestanden:
+                    top_dossier_bestanden = eind_bestanden_lijst
 
-                if eerste_bestand:
-                    b_naam_schoon = eerste_bestand.split('/')[-1]
-                    query_ref = f"name = '{b_naam_schoon}' and trashed = false"
-                    res_ref = drive_service.files().list(q=query_ref, fields='files(id, name, mimeType)').execute().get('files', [])
-                    if res_ref:
-                        st.session_state.bron_details.append({
-                            "naam": res_ref[0]['name'],
-                            "id": res_ref[0]['id'],
-                            "mime": res_ref[0]['mimeType']
+                # Haal Drive-ID's op voor de pagina's
+                blader_lijst = []
+                for b_naam in top_dossier_bestanden:
+                    b_schoon = b_naam.split('/')[-1]
+                    q = f"name = '{b_schoon}' and trashed = false"
+                    res = drive_service.files().list(q=q, fields='files(id, name, mimeType)').execute().get('files', [])
+                    if res:
+                        blader_lijst.append({
+                            "naam": res[0]['name'],
+                            "id": res[0]['id'],
+                            "mime": res[0]['mimeType']
                         })
+
+                st.session_state.blader_paginas = blader_lijst
+                st.session_state.huidige_pagina_index = 0
 
         else:
             # KLEIN DOSSIER: Haal originele afbeeldingen/PDF's op uit Drive
@@ -479,7 +488,7 @@ INSTRUCTIES VOOR JE RAPPORT:
                         b_mime = f['mimeType']
                         b_real_naam = f['name']
 
-                        st.session_state.bron_details.append({
+                        st.session_state.blader_paginas.append({
                             "naam": b_real_naam,
                             "id": b_id,
                             "mime": b_mime
@@ -549,24 +558,47 @@ INSTRUCTIES VOOR JE RAPPORT:
         st.session_state.start_zoekopdracht = False
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE BRONNEN MET PREVIEWS & RAPPORT
+# 5. WEERGAVE BRONNEN MET IN-APP PAGINA-BLADERAAR
 # ------------------------------------------------------------------------------
 if not st.session_state.start_zoekopdracht:
-    if st.session_state.bron_details:
-        st.subheader("📁 Geselecteerde bronnen / Omslag:")
+    if st.session_state.blader_paginas:
+        st.subheader("📖 Geselecteerde bron / Blader door pagina's:")
         
-        cols = st.columns(3)
-        for index, bron in enumerate(st.session_state.bron_details):
-            b_naam = bron["naam"]
-            b_id = bron["id"]
-            
-            thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w800"
-            drive_view_url = f"https://drive.google.com/file/d/{b_id}/view"
+        totaal_paginas = len(st.session_state.blader_paginas)
+        curr_idx = st.session_state.huidige_pagina_index
 
-            with cols[index % 3]:
-                with st.expander(f"📄 {b_naam}", expanded=True):
-                    st.image(thumbnail_url, caption=b_naam, use_container_width=True)
-                    st.link_button("🔍 Open origineel in Google Drive", drive_view_url)
+        # Zorg dat de index binnen de grenzen valt
+        if curr_idx >= totaal_paginas:
+            curr_idx = 0
+            st.session_state.huidige_pagina_index = 0
+
+        huidige_pagina = st.session_state.blader_paginas[curr_idx]
+        b_naam = huidige_pagina["naam"]
+        b_id = huidige_pagina["id"]
+        
+        thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w800"
+
+        # Vaste kolom-breedte voor overzichtelijke weergave van het boek
+        b_col1, b_col2, b_col3 = st.columns([1, 2, 1])
+
+        with b_col2:
+            st.image(thumbnail_url, caption=f"Pagina: {b_naam}", use_container_width=True)
+
+            # BLADERKNOPPEN ONDER DE AFBEELDING
+            k_col1, k_col2, k_col3 = st.columns([1, 2, 1])
+
+            with k_col1:
+                if st.button("◀ Vorige", disabled=(curr_idx == 0), use_container_width=True):
+                    st.session_state.huidige_pagina_index -= 1
+                    st.rerun()
+
+            with k_col2:
+                st.markdown(f"<p style='text-align: center; font-weight: bold; margin-top: 5px;'>Pagina {curr_idx + 1} van {totaal_paginas}</p>", unsafe_allow_html=True)
+
+            with k_col3:
+                if st.button("Volgende ▶", disabled=(curr_idx == totaal_paginas - 1), use_container_width=True):
+                    st.session_state.huidige_pagina_index += 1
+                    st.rerun()
 
     if st.session_state.chat_historie:
         st.divider()

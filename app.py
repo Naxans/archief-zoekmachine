@@ -14,7 +14,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.2.0"
+APP_VERSION = "v2.2.1"
 APP_DATE = "2026"
 
 # SDK meldingen onderdrukken voor schone logs
@@ -119,13 +119,13 @@ with st.sidebar:
 
     with st.expander("💡 Tips voor het testen"):
         st.markdown("""
-        * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken (zoals *"Geef alle informatie over RBC"*). Bij een te brede vraag worden er erg veel documenten gevonden. Vragen naar specifieke namen, jaartallen, boekboektitels of onderwerpen werken het snelst en het beste.
+        * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken (zoals *"Geef alle informatie over RBC"*). Bij een te brede vraag worden er erg veel documenten gevonden. Vragen naar specifieke namen, jaartallen, boektitels of onderwerpen werken het snelst en het beste.
         * **Knop 'Voer onderzoek uit':** Hiermee start je de zoekopdracht. De AI gaat dan direct de relevante documenten en afbeeldingen analyseren.
         * **Knop 'Stop / Annuleer':** Mocht een zoekopdracht te lang duren of wil je halverwege stoppen, dan kun je hiermee het proces meteen afbreken.
         * **Schuifregelaar 'Max dossiers (Document_ID's)':** Hiermee bepaal je hoeveel verschillende archiefmappen/boeken de AI maximaal mag bekijken.
         """)
 
-# Titel & Versie-informatie op de hoofdpagina (rechterbovenhoek)
+# Titel & Versie-informatie op de hoofdpagina
 col_title, col_ver = st.columns([4, 1])
 with col_title:
     st.title("🔍 RBC Archief zoekmachine")
@@ -143,7 +143,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: Wat staat er in het boek van Mathieu Rutten over de elektriciteitscentrale van Tongeren?',
+        placeholder='Bijv: Wat staat er in het boek van Mathieu Rutten over de elektriciteitscentrale in Tongeren?',
         height=100
     )
 with col2:
@@ -213,7 +213,7 @@ if st.session_state.start_zoekopdracht:
                 'weet', 'welke', 'zoek', 'vind', 'wat', 'is', 'de', 'het', 'een', 'wanneer', 
                 'overleed', 'gestorven', 'waar', 'wie', 'hoe', 'quand', 'où', 'geboren', 'overleden',
                 'dossier', 'document', 'archief', 'toon', 'laat', 'zien', 'hebt', 'gehad', 'expliciet',
-                'boek', 'publicatie', 'staan', 'vertel', 'me'
+                'boek', 'publicatie', 'staan', 'vertel', 'me', 'geschreven', 'door'
             ]
             
             schoon_vraag = onderzoeksvraag.translate(str.maketrans('', '', string.punctuation))
@@ -353,7 +353,7 @@ Geef UITSLUITEND de exacta Document_ID's terug gescheiden door komma's, OF het w
 
         # STAP 1.5: Verzamel alle gekoppelde bestanden en gegevens per dossier uit de Sheet
         eind_bestanden_lijst = []
-        sheet_dossier_data = []  # Bewaart complete Sheet-tekst voor boeken/grote dossiers
+        sheet_dossier_data = []
 
         for row in data:
             doc_id = str(row.get('Document_ID', '')).strip()
@@ -375,7 +375,7 @@ Geef UITSLUITEND de exacta Document_ID's terug gescheiden door komma's, OF het w
             st.stop()
 
         # STAP 2 & 3: Slimme verwerking afhankelijk van de grootte van de geselecteerde dossiers
-        MAX_FOTO_LIMIET = 10  # Als een dossier/boek meer dan 10 pagina's heeft, gebruiken we de Sheet-teksten
+        MAX_FOTO_LIMIET = 10
 
         onderzoeks_payload = [
             f"""Jij bent een financieel-historisch expert en archivaris.
@@ -392,7 +392,7 @@ INSTRUCTIES VOOR JE RAPPORT:
         ]
 
         if len(eind_bestanden_lijst) > MAX_FOTO_LIMIET:
-            # GROOT DOSSIER / BOEK: Gebruik de rijke Sheet-data voor razendsnelle analyse
+            # GROOT DOSSIER / BOEK: Gebruik de rijke Sheet-data voor analyse
             with st.spinner(f"Stap 2/3: Groot dossier/boek gedetecteerd ({len(eind_bestanden_lijst)} pagina's). Gegevens bundelen uit Sheet..."):
                 tekst_gebundeld = f"\n--- DOSSIER INHOUD (TOTAAL {len(sheet_dossier_data)} PAGINA'S/RIJEN UIT SHEET) ---\n"
                 for idx, r in enumerate(sheet_dossier_data, start=1):
@@ -410,10 +410,27 @@ INSTRUCTIES VOOR JE RAPPORT:
 
                 onderzoeks_payload.append(tekst_gebundeld)
                 
-                # Bewaart eerste pagina als visuele referentie
-                if eind_bestanden_lijst:
+                # --------------------------------------------------------------
+                # VERBETERDE OMSLAG-SELECTIE: PAKT SPECIFIEK HET ALLEREERSTE BESTAND
+                # VAN HET HOOGST SCORENDE DOSSIER (BIJV. DE OMSLAG VAN DOC_0001)
+                # --------------------------------------------------------------
+                top_doc_id = geselecteerde_doc_ids[0] if geselecteerde_doc_ids else None
+                eerste_bestand = None
+
+                if top_doc_id:
+                    for r in sheet_dossier_data:
+                        d_id = str(r.get('Document_ID', '')).strip()
+                        b_n = str(r.get('Bestandsnaam', '')).strip()
+                        if d_id.lower() == top_doc_id.lower() and b_n:
+                            eerste_bestand = b_n
+                            break
+
+                if not eerste_bestand and eind_bestanden_lijst:
                     eerste_bestand = eind_bestanden_lijst[0]
-                    query_ref = f"name = '{eerste_bestand}' and trashed = false"
+
+                if eerste_bestand:
+                    b_naam_schoon = eerste_bestand.split('/')[-1]
+                    query_ref = f"name = '{b_naam_schoon}' and trashed = false"
                     res_ref = drive_service.files().list(q=query_ref, fields='files(id, name, mimeType)').execute().get('files', [])
                     if res_ref:
                         st.session_state.bron_details.append({

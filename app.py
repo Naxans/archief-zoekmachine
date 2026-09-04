@@ -4,6 +4,7 @@ import string
 import logging
 import warnings
 import streamlit as st
+import streamlit.components.v1 as components
 from PIL import Image
 import gspread
 from google.oauth2.service_account import Credentials
@@ -14,7 +15,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.5.0"
+APP_VERSION = "v2.6.0"
 APP_DATE = "2026"
 
 # SDK meldingen onderdrukken voor schone logs
@@ -126,7 +127,7 @@ with st.sidebar:
         * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken. Vragen naar specifieke namen, jaartallen, boektitels of onderwerpen werken het snelst.
         * **Knop 'Voer onderzoek uit':** Hiermee start je de zoekopdracht.
         * **Knop 'Stop / Annuleer':** Mocht een zoekopdracht te lang duren, dan kun je hiermee het proces meteen afbreken.
-        * **Bladeren & Zoomen:** Gebruik het dossier-selectiemenu om van document te wisselen. Gebruik de Zoom-slider of klik op de foto voor schermvullende weergave.
+        * **Bladeren, Zoomen & Slepen:** Gebruik de muiswiel-scroll in het venster om in te zoomen op de foto en houd de linkermuisknop ingedrukt om de foto te verplaatsen.
         """)
 
 # Titel & Versie-informatie op de hoofdpagina
@@ -559,13 +560,13 @@ INSTRUCTIES VOOR JE RAPPORT:
         st.session_state.start_zoekopdracht = False
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE BRONNEN MET DOSSIER-SELECTIE, PAGINA-BLADERAAR & ZOOM
+# 5. WEERGAVE BRONNEN MET DRIVE PREVIEW (ZOOM & PAN INTERACTIE)
 # ------------------------------------------------------------------------------
 if not st.session_state.start_zoekopdracht:
     if st.session_state.blader_paginas:
         st.subheader("📖 Geselecteerde bron / Blader door pagina's:")
         
-        # NIEUW: Kies welk dossier op het scherm getoond wordt
+        # Kies welk dossier op het scherm getoond wordt
         unieke_dossiers = list(dict.fromkeys([p.get("doc_id", "Dossier 1") for p in st.session_state.blader_paginas if p.get("doc_id")]))
         
         if len(unieke_dossiers) > 1:
@@ -589,35 +590,27 @@ if not st.session_state.start_zoekopdracht:
         b_naam = huidige_pagina["naam"]
         b_id = huidige_pagina["id"]
         
-        # Hoge resolutie thumbnail (sz=w1600) voor scherpe weergave
-        thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w1600"
+        # Google Drive Viewer URL voor interactieve preview (zoom + pan)
+        preview_url = f"https://drive.google.com/file/d/{b_id}/preview"
 
-        # Zoom-schuifregelaar
-        zoom_niveau = st.slider("🔍 Zoom (afbeeldingsgrootte):", min_value=30, max_value=100, value=65, step=5, format="%d%%")
+        # Interactieve Google Drive Viewer inbedden
+        components.iframe(preview_url, height=650, scrolling=False)
 
-        # Dynamische kolombreedte op basis van Zoom-slider
-        linkse_marge = (100 - zoom_niveau) / 2
-        
-        b_col1, b_col2, b_col3 = st.columns([max(0.01, linkse_marge), zoom_niveau, max(0.01, linkse_marge)])
+        # BLADERKNOPPEN ONDER DE VIEWER
+        k_col1, k_col2, k_col3 = st.columns([1, 2, 1])
 
-        with b_col2:
-            st.image(thumbnail_url, caption=f"Pagina: {b_naam} (Klik op foto voor schermvullend)", use_container_width=True)
+        with k_col1:
+            if st.button("◀ Vorige pagina", disabled=(curr_idx == 0), use_container_width=True):
+                st.session_state.huidige_pagina_index -= 1
+                st.rerun()
 
-            # BLADERKNOPPEN ONDER DE AFBEELDING
-            k_col1, k_col2, k_col3 = st.columns([1, 2, 1])
+        with k_col2:
+            st.markdown(f"<p style='text-align: center; font-weight: bold; margin-top: 5px;'>Pagina {curr_idx + 1} van {totaal_paginas} ({b_naam})</p>", unsafe_allow_html=True)
 
-            with k_col1:
-                if st.button("◀ Vorige", disabled=(curr_idx == 0), use_container_width=True):
-                    st.session_state.huidige_pagina_index -= 1
-                    st.rerun()
-
-            with k_col2:
-                st.markdown(f"<p style='text-align: center; font-weight: bold; margin-top: 5px;'>Pagina {curr_idx + 1} van {totaal_paginas}</p>", unsafe_allow_html=True)
-
-            with k_col3:
-                if st.button("Volgende ▶", disabled=(curr_idx == totaal_paginas - 1), use_container_width=True):
-                    st.session_state.huidige_pagina_index += 1
-                    st.rerun()
+        with k_col3:
+            if st.button("Volgende pagina ▶", disabled=(curr_idx == totaal_paginas - 1), use_container_width=True):
+                st.session_state.huidige_pagina_index += 1
+                st.rerun()
 
     if st.session_state.chat_historie:
         st.divider()

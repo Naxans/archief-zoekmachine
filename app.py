@@ -16,7 +16,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.7.0"
+APP_VERSION = "v2.7.1"
 APP_DATE = "2026"
 
 # SDK meldingen onderdrukken voor schone logs
@@ -152,7 +152,7 @@ with col1:
         height=100
     )
 with col2:
-    max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=15, step=5)
+    max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=10, step=5)
 
 # Knoppenbalk
 btn_col1, btn_col2 = st.columns([2, 1])
@@ -346,9 +346,11 @@ if st.session_state.start_zoekopdracht:
                         req = drive_service.files().get_media(fileId=f['id'])
                         f_data = req.execute()
                         img = Image.open(io.BytesIO(f_data)).convert('RGB')
-                        img.thumbnail((800, 800))
+                        
+                        # VERLAAGDE RESOLUTIE NAAR 600 PX VOOR MEMORY SAVING
+                        img.thumbnail((600, 600))
                         img_byte_arr = io.BytesIO()
-                        img.save(img_byte_arr, format='JPEG', quality=70)
+                        img.save(img_byte_arr, format='JPEG', quality=60)
 
                         onderzoeks_payload.append(types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/jpeg'))
 

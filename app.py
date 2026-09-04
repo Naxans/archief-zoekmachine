@@ -14,7 +14,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.1.5"
+APP_VERSION = "v2.1.6"
 APP_DATE = "2026"
 
 # SDK meldingen onderdrukken voor schone logs
@@ -104,19 +104,16 @@ if "start_zoekopdracht" not in st.session_state:
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
-# ZIJBALK: Overzichtelijk met uitklapbare help-secties (ZONDER VERSENUMMER ONDERAAN)
+# ZIJBALK: Overzichtelijk met uitklapbare help-secties
 with st.sidebar:
     st.title("ℹ️ Help & Info")
     
     with st.expander("🚨 Belangrijke informatie & Foutmeldingen"):
         st.markdown("""
-        **1. Staat de app in 'slaapstand'?**  
-        Om capaciteit te besparen gaat de zoekmachine automatisch in slaapstand als hij een paar dagen niet is gebruikt. Zie je de knop *"Yes, get this app back up!"*? Klik hierop en wacht circa 30 seconden. Duurt het langer? Wacht 1 tot 2 minuten en ververs de pagina (F5).
-
-        **2. Rood blok met foutmelding (bijv. 429 RESOURCE_EXHAUSTED)?**  
+        **1. Rood blok met foutmelding (bijv. 429 RESOURCE_EXHAUSTED)?**  
         Deze zoekmachine maakt gebruik van een gratis AI-model met een dagelijks limiet op het aantal zoekopdrachten. Krijg je een melding over 'quota' of 'rate-limit'? Dan is het maximale aantal AI-scans voor vandaag bereikt. Probeer je zoekopdracht morgen opnieuw; de teller wordt elke 24 uur automatisch gereset!
 
-        **3. Houd rekening met mogelijke fouten in de AI-analyse**  
+        **2. Houd rekening met mogelijke fouten in de AI-analyse**  
         De gratis variant gebruikt een lichter AI-model dat minder diepgaand kan redeneren of complexe documentstructuren soms verkeerd begrijpt. De AI kan hierdoor incidenteel een verkeerde datum, naam of conclusie trekken. Controleer cruciale informatie daarom altijd even in het originele archiefdocument!
         """)
 

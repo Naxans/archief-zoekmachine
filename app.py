@@ -14,7 +14,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.4.0"
+APP_VERSION = "v2.5.0"
 APP_DATE = "2026"
 
 # SDK meldingen onderdrukken voor schone logs
@@ -126,7 +126,7 @@ with st.sidebar:
         * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken. Vragen naar specifieke namen, jaartallen, boektitels of onderwerpen werken het snelst.
         * **Knop 'Voer onderzoek uit':** Hiermee start je de zoekopdracht.
         * **Knop 'Stop / Annuleer':** Mocht een zoekopdracht te lang duren, dan kun je hiermee het proces meteen afbreken.
-        * **Bladeren & Zoomen:** Gebruik de bladerknoppen onder de foto. Pas de Zoom-slider aan of klik op de foto om deze schermvullend te openen.
+        * **Bladeren & Zoomen:** Gebruik het dossier-selectiemenu om van document te wisselen. Gebruik de Zoom-slider of klik op de foto voor schermvullende weergave.
         """)
 
 # Titel & Versie-informatie op de hoofdpagina
@@ -212,14 +212,14 @@ if st.session_state.start_zoekopdracht:
             geselecteerde_doc_ids = []
 
             # ------------------------------------------------------------------
-            # SLIMME RELEVANTIE-SCORING (WEIGHTED MATCHING + BOEK & FAMILIE BOOST)
+            # SLIMME RELEVANTIE-SCORING (WEIGHTED MATCHING + BOEK BOOST)
             # ------------------------------------------------------------------
             negeer_woorden = [
                 'geef', 'alle', 'over', 'radio', 'model', 'voor', 'naar', 'van', 'informatie', 
                 'weet', 'welke', 'zoek', 'vind', 'wat', 'is', 'de', 'het', 'een', 'wanneer', 
                 'overleed', 'gestorven', 'waar', 'wie', 'hoe', 'quand', 'où', 'geboren', 'overleden',
                 'dossier', 'document', 'archief', 'toon', 'laat', 'zien', 'hebt', 'gehad', 'expliciet',
-                'boek', 'publicatie', 'staan', 'vertel', 'me', 'geschreven', 'door'
+                'geschreven', 'door', 'staan', 'vertel', 'me'
             ]
             
             schoon_vraag = onderzoeksvraag.translate(str.maketrans('', '', string.punctuation))
@@ -237,7 +237,8 @@ if st.session_state.start_zoekopdracht:
             doc_scores = {}
 
             if zoek_groepen:
-                familie_termen = ['familie', 'stamboom', 'geslacht', 'ouders', 'kinderen', 'echtgenoot', 'echtgenote', 'huwelijk', 'boek', 'auteur']
+                familie_termen = ['familie', 'stamboom', 'geslacht', 'ouders', 'kinderen', 'echtgenoot', 'echtgenote', 'huwelijk', 'auteur']
+                is_boek_vraag = any(b_woord in onderzoeksvraag.lower() for b_woord in ['boek', 'publicatie', 'omslag', 'band'])
 
                 for row in data:
                     doc_id_val = str(row.get('Document_ID', '')).strip()
@@ -262,6 +263,10 @@ if st.session_state.start_zoekopdracht:
 
                     if matched_groepen_count == len(zoek_groepen):
                         score += 10
+
+                    # EXTRA BOOST: Als de vraag over een 'boek' gaat, geef boeken/omslagen voorrang
+                    if is_boek_vraag and any(b_term in combi_tekst for b_term in ['boek', 'omslag', 'publicatie']):
+                        score += 25
 
                     if any(v in combi_tekst for grp in zoek_groepen for v in grp if len(v) > 3):
                         if any(fam_term in combi_tekst for fam_term in familie_termen):
@@ -417,33 +422,24 @@ INSTRUCTIES VOOR JE RAPPORT:
                 onderzoeks_payload.append(tekst_gebundeld)
 
                 # --------------------------------------------------------------
-                # VERZAMEL ALLE PAGINA'S VAN HET TOP-DOSSIER VOOR BLADERFUNCTIE
+                # VERZAMEL ALLE PAGINA'S VAN DE DOSSIERS VOOR BLADERFUNCTIE
                 # --------------------------------------------------------------
-                top_doc_id = geselecteerde_doc_ids[0] if geselecteerde_doc_ids else None
-                top_dossier_bestanden = []
-
-                if top_doc_id:
+                blader_lijst = []
+                for g_id in geselecteerde_doc_ids:
                     for r in sheet_dossier_data:
                         d_id = str(r.get('Document_ID', '')).strip()
                         b_n = str(r.get('Bestandsnaam', '')).strip()
-                        if d_id.lower() == top_doc_id.lower() and b_n and b_n not in top_dossier_bestanden:
-                            top_dossier_bestanden.append(b_n)
-
-                if not top_dossier_bestanden:
-                    top_dossier_bestanden = eind_bestanden_lijst
-
-                # Haal Drive-ID's op voor de pagina's
-                blader_lijst = []
-                for b_naam in top_dossier_bestanden:
-                    b_schoon = b_naam.split('/')[-1]
-                    q = f"name = '{b_schoon}' and trashed = false"
-                    res = drive_service.files().list(q=q, fields='files(id, name, mimeType)').execute().get('files', [])
-                    if res:
-                        blader_lijst.append({
-                            "naam": res[0]['name'],
-                            "id": res[0]['id'],
-                            "mime": res[0]['mimeType']
-                        })
+                        if d_id.lower() == g_id.lower() and b_n:
+                            b_schoon = b_n.split('/')[-1]
+                            q = f"name = '{b_schoon}' and trashed = false"
+                            res = drive_service.files().list(q=q, fields='files(id, name, mimeType)').execute().get('files', [])
+                            if res:
+                                blader_lijst.append({
+                                    "doc_id": d_id,
+                                    "naam": res[0]['name'],
+                                    "id": res[0]['id'],
+                                    "mime": res[0]['mimeType']
+                                })
 
                 st.session_state.blader_paginas = blader_lijst
                 st.session_state.huidige_pagina_index = 0
@@ -488,7 +484,12 @@ INSTRUCTIES VOOR JE RAPPORT:
                         b_mime = f['mimeType']
                         b_real_naam = f['name']
 
+                        # Bepaal bijbehorend doc_id
+                        matching_row = next((r for r in sheet_dossier_data if str(r.get('Bestandsnaam', '')).strip() == b_naam), {})
+                        doc_id_val = matching_row.get('Document_ID', geselecteerde_doc_ids[0] if geselecteerde_doc_ids else "Dossier 1")
+
                         st.session_state.blader_paginas.append({
+                            "doc_id": doc_id_val,
                             "naam": b_real_naam,
                             "id": b_id,
                             "mime": b_mime
@@ -558,21 +559,33 @@ INSTRUCTIES VOOR JE RAPPORT:
         st.session_state.start_zoekopdracht = False
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE BRONNEN MET IN-APP PAGINA-BLADERAAR & ZOOM-FUNCTIE
+# 5. WEERGAVE BRONNEN MET DOSSIER-SELECTIE, PAGINA-BLADERAAR & ZOOM
 # ------------------------------------------------------------------------------
 if not st.session_state.start_zoekopdracht:
     if st.session_state.blader_paginas:
         st.subheader("📖 Geselecteerde bron / Blader door pagina's:")
         
-        totaal_paginas = len(st.session_state.blader_paginas)
+        # NIEUW: Kies welk dossier op het scherm getoond wordt
+        unieke_dossiers = list(dict.fromkeys([p.get("doc_id", "Dossier 1") for p in st.session_state.blader_paginas if p.get("doc_id")]))
+        
+        if len(unieke_dossiers) > 1:
+            gekozen_dossier = st.selectbox(
+                "📁 Switch van document/boek om te bekijken:",
+                options=unieke_dossiers,
+                index=0
+            )
+            actieve_paginas = [p for p in st.session_state.blader_paginas if p.get("doc_id") == gekozen_dossier]
+        else:
+            actieve_paginas = st.session_state.blader_paginas
+
+        totaal_paginas = len(actieve_paginas)
         curr_idx = st.session_state.huidige_pagina_index
 
-        # Zorg dat de index binnen de grenzen valt
         if curr_idx >= totaal_paginas:
             curr_idx = 0
             st.session_state.huidige_pagina_index = 0
 
-        huidige_pagina = st.session_state.blader_paginas[curr_idx]
+        huidige_pagina = actieve_paginas[curr_idx]
         b_naam = huidige_pagina["naam"]
         b_id = huidige_pagina["id"]
         
@@ -585,10 +598,7 @@ if not st.session_state.start_zoekopdracht:
         # Dynamische kolombreedte op basis van Zoom-slider
         linkse_marge = (100 - zoom_niveau) / 2
         
-        if linkse_marge > 0:
-            b_col1, b_col2, b_col3 = st.columns([linkse_marge, zoom_niveau, linkse_marge])
-        else:
-            b_col1, b_col2, b_col3 = st.columns([0.01, 99.98, 0.01])
+        b_col1, b_col2, b_col3 = st.columns([max(0.01, linkse_marge), zoom_niveau, max(0.01, linkse_marge)])
 
         with b_col2:
             st.image(thumbnail_url, caption=f"Pagina: {b_naam} (Klik op foto voor schermvullend)", use_container_width=True)

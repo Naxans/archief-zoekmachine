@@ -14,7 +14,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.3.0"
+APP_VERSION = "v2.4.0"
 APP_DATE = "2026"
 
 # SDK meldingen onderdrukken voor schone logs
@@ -126,7 +126,7 @@ with st.sidebar:
         * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken. Vragen naar specifieke namen, jaartallen, boektitels of onderwerpen werken het snelst.
         * **Knop 'Voer onderzoek uit':** Hiermee start je de zoekopdracht.
         * **Knop 'Stop / Annuleer':** Mocht een zoekopdracht te lang duren, dan kun je hiermee het proces meteen afbreken.
-        * **Bladeren door pagina's:** Onder het zoekresultaat kun je met de knoppen '◀ Vorige' en 'Volgende ▶' rechtstreeks door de pagina's van het geselecteerde boek bladeren!
+        * **Bladeren & Zoomen:** Gebruik de bladerknoppen onder de foto. Pas de Zoom-slider aan of klik op de foto om deze schermvullend te openen.
         """)
 
 # Titel & Versie-informatie op de hoofdpagina
@@ -558,7 +558,7 @@ INSTRUCTIES VOOR JE RAPPORT:
         st.session_state.start_zoekopdracht = False
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE BRONNEN MET IN-APP PAGINA-BLADERAAR
+# 5. WEERGAVE BRONNEN MET IN-APP PAGINA-BLADERAAR & ZOOM-FUNCTIE
 # ------------------------------------------------------------------------------
 if not st.session_state.start_zoekopdracht:
     if st.session_state.blader_paginas:
@@ -576,13 +576,22 @@ if not st.session_state.start_zoekopdracht:
         b_naam = huidige_pagina["naam"]
         b_id = huidige_pagina["id"]
         
-        thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w800"
+        # Hoge resolutie thumbnail (sz=w1600) voor scherpe weergave
+        thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w1600"
 
-        # Vaste kolom-breedte voor overzichtelijke weergave van het boek
-        b_col1, b_col2, b_col3 = st.columns([1, 2, 1])
+        # Zoom-schuifregelaar
+        zoom_niveau = st.slider("🔍 Zoom (afbeeldingsgrootte):", min_value=30, max_value=100, value=65, step=5, format="%d%%")
+
+        # Dynamische kolombreedte op basis van Zoom-slider
+        linkse_marge = (100 - zoom_niveau) / 2
+        
+        if linkse_marge > 0:
+            b_col1, b_col2, b_col3 = st.columns([linkse_marge, zoom_niveau, linkse_marge])
+        else:
+            b_col1, b_col2, b_col3 = st.columns([0.01, 99.98, 0.01])
 
         with b_col2:
-            st.image(thumbnail_url, caption=f"Pagina: {b_naam}", use_container_width=True)
+            st.image(thumbnail_url, caption=f"Pagina: {b_naam} (Klik op foto voor schermvullend)", use_container_width=True)
 
             # BLADERKNOPPEN ONDER DE AFBEELDING
             k_col1, k_col2, k_col3 = st.columns([1, 2, 1])

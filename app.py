@@ -4,6 +4,7 @@ import string
 import logging
 import warnings
 import json
+import re
 import streamlit as st
 import streamlit.components.v1 as components
 from PIL import Image
@@ -16,12 +17,17 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.7.1"
+APP_VERSION = "v2.7.2"
 APP_DATE = "2026"
 
 # SDK meldingen onderdrukken voor schone logs
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
+
+# Hulpfunctie voor 'natuurlijke sortering' (1 komt vóór 10, maakt geen verschil tussen 1 en 01)
+def natuurlijke_sortering(item):
+    tekst = item.get('naam', '') if isinstance(item, dict) else str(item)
+    return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', tekst)]
 
 # ------------------------------------------------------------------------------
 # 1. AUTHENTICATIE VIA STREAMLIT SECRETS
@@ -233,7 +239,7 @@ if st.session_state.start_zoekopdracht:
 
             if zoek_groepen:
                 familie_termen = ['familie', 'stamboom', 'geslacht', 'ouders', 'kinderen', 'echtgenoot', 'echtgenote', 'huwelijk', 'auteur']
-                is_boek_vraag = any(b_woord in onderzoeksvraag.lower() for b_woord in ['boek', 'publicatie', 'omslag', 'band'])
+                is_boek_vraag = any(b_woord in onderzoeksvraag.lower() for b_woord in ['boek', 'publicatie', 'omslag', 'band', 'tijdschrift', 'magazine', 'weekblad'])
 
                 for row in data:
                     doc_id_val = str(row.get('Document_ID', '')).strip()
@@ -250,7 +256,7 @@ if st.session_state.start_zoekopdracht:
                     score = matched_groepen_count * 5
 
                     if matched_groepen_count == len(zoek_groepen): score += 10
-                    if is_boek_vraag and any(b_term in combi_tekst for b_term in ['boek', 'omslag', 'publicatie']): score += 25
+                    if is_boek_vraag and any(b_term in combi_tekst for b_term in ['boek', 'omslag', 'publicatie', 'tijdschrift', 'weekblad']): score += 25
                     if any(v in combi_tekst for grp in zoek_groepen for v in grp if len(v) > 3) and any(f in combi_tekst for f in familie_termen): score += 8
 
                     if score > 0:
@@ -303,6 +309,9 @@ if st.session_state.start_zoekopdracht:
                 if b_naam and b_naam not in eind_bestanden_lijst:
                     eind_bestanden_lijst.append(b_naam)
 
+        # TOEPASSEN NATUURLIJKE SORTERING OP DE BESTANDENLIJST
+        eind_bestanden_lijst.sort(key=natuurlijke_sortering)
+
         with st.expander("🔍 Details van de geselecteerde documenten", expanded=True):
             st.write(f"**Geselecteerde Document_ID's:** `{geselecteerde_doc_ids}`")
             st.write(f"**Aantal pagina's/bestanden:** `{len(eind_bestanden_lijst)} items`")
@@ -328,6 +337,8 @@ if st.session_state.start_zoekopdracht:
                             if res:
                                 blader_lijst.append({"doc_id": d_id, "naam": res[0]['name'], "id": res[0]['id'], "mime": res[0]['mimeType']})
 
+                # NATUURLIJKE SORTERING TOEPASSEN OP BLADERLIJST
+                blader_lijst.sort(key=natuurlijke_sortering)
                 st.session_state.blader_paginas = blader_lijst
 
         else:
@@ -354,6 +365,9 @@ if st.session_state.start_zoekopdracht:
 
                         onderzoeks_payload.append(types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/jpeg'))
 
+                # NATUURLIJKE SORTERING TOEPASSEN OP BLADERLIJST
+                st.session_state.blader_paginas.sort(key=natuurlijke_sortering)
+
         # Gemini Analyse
         with st.spinner("Historische analyse uitvoeren via Gemini..."):
             try:
@@ -376,8 +390,11 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
     if len(unieke_dossiers) > 1:
         gekozen_dossier = st.selectbox("📁 Switch van document/boek om te bekijken:", options=unieke_dossiers, index=0)
         actieve_paginas = [p for p in st.session_state.blader_paginas if p.get("doc_id") == gekozen_dossier]
+        # SORTEER DE ACTIEVE PAGINA'S OOK VIA NATUURLIJKE SORTERING
+        actieve_paginas.sort(key=natuurlijke_sortering)
     else:
         actieve_paginas = st.session_state.blader_paginas
+        actieve_paginas.sort(key=natuurlijke_sortering)
 
     # Converteer paginagegevens naar JSON voor de JavaScript-viewer
     paginas_json = json.dumps(actieve_paginas)

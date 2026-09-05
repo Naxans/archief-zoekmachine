@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.6.3"
+APP_VERSION = "v3.6.4"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -176,7 +176,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. WATERDICHTE SELEKTIE (GEAVANCEERDE SCORE-FILTERING)
+# 4. HYBRIDE SELECTIE (GECOMBINEERDE TREFWOORD + SEMANTISCHE RELATIE MATCHING)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -233,65 +233,56 @@ if st.session_state.start_zoekopdracht:
                 if inhoud_val:
                     dossier_samenvattingen[doc_id]["Inhoud"].add(str(inhoud_val).strip())
 
-            # Genormaliseerde trefwoordenscan met scoring
+            # Stap A: Directe Trefwoord-filtering (Python)
             vraag_schoon = re.sub(r'[^\w\s]', ' ', st.session_state.huidige_vraag.lower())
-            negeer_woorden = {'wat', 'staat', 'het', 'een', 'over', 'van', 'de', 'geef', 'naam', 'door', 'met', 'voor', 'boek', 'geschreven'}
+            negeer_woorden = {'wat', 'staat', 'het', 'een', 'over', 'van', 'de', 'geef', 'naam', 'door', 'met', 'voor', 'boek', 'geschreven', 'grootte', 'bedrag'}
             zoek_termen = [w for w in vraag_schoon.split() if len(w) >= 3 and w not in negeer_woorden]
 
-            dossier_scores = {}
+            directe_matches = []
             for d_id, d_info in dossier_samenvattingen.items():
                 volle_tekst = f"{d_id} {' '.join(d_info['Personen'])} {' '.join(d_info['Onderwerpen'])} {' '.join(d_info['Inhoud'])} {' '.join(d_info['Bestanden'])}".lower()
+                if any(term in volle_tekst for term in zoek_termen):
+                    directe_matches.append(d_id)
+
+            # Stap B: Slimme aanvulling via Gemini AI voor juridische/persoons-context
+            index_regels = []
+            for d_id, d_info in dossier_samenvattingen.items():
+                pers_str = ", ".join(d_info["Personen"]) if d_info["Personen"] else "Geen"
+                ond_str = ", ".join(d_info["Onderwerpen"]) if d_info["Onderwerpen"] else "Geen"
+                inhoud_str = " | ".join(d_info["Inhoud"]) if d_info["Inhoud"] else "Geen"
+                bestanden_str = ", ".join(d_info["Bestanden"]) if d_info["Bestanden"] else ""
                 
-                score = 0
-                for term in zoek_termen:
-                    if term in volle_tekst:
-                        score += 2
-                        # Extra bonus als de term in persoonsnamen of onderwerpen staat
-                        if any(term in p.lower() for p in d_info['Personen']):
-                            score += 5
-                        if any(term in o.lower() for o in d_info['Onderwerpen']):
-                            score += 3
-                
-                if score > 0:
-                    dossier_scores[d_id] = score
+                regel = f"Document_ID: {d_id} | Bestanden: {bestanden_str} | Datum: {d_info['Datum']} | Personen: {pers_str} | Onderwerp: {ond_str} | Inhoud: {inhoud_str}"
+                index_regels.append(regel)
 
-            if dossier_scores:
-                # Sorteer dossiers op basis van hoogste matchingscore
-                gesorteerde_dossiers = sorted(dossier_scores.keys(), key=lambda k: dossier_scores[k], reverse=True)
-                geselecteerde_ids = gesorteerde_dossiers[:max_dossiers]
-            else:
-                geselecteerde_ids = []
+            index_tekst = "\n".join(index_regels)[:250000]
 
-            # Als de scoring niks oplevert, vraag Gemini als fallback
-            if not geselecteerde_ids:
-                index_regels = []
-                for d_id, d_info in dossier_samenvattingen.items():
-                    pers_str = ", ".join(d_info["Personen"]) if d_info["Personen"] else "Geen"
-                    ond_str = ", ".join(d_info["Onderwerpen"]) if d_info["Onderwerpen"] else "Geen"
-                    inhoud_str = " | ".join(d_info["Inhoud"]) if d_info["Inhoud"] else "Geen"
-                    bestanden_str = ", ".join(d_info["Bestanden"]) if d_info["Bestanden"] else ""
-                    
-                    regel = f"Document_ID: {d_id} | Bestanden: {bestanden_str} | Datum: {d_info['Datum']} | Personen: {pers_str} | Onderwerp: {ond_str} | Inhoud: {inhoud_str}"
-                    index_regels.append(regel)
-
-                index_tekst = "\n".join(index_regels)[:250000]
-
-                filter_prompt = f"""
-Jij bent een archiefassistent. Selecteer de meest relevante Document_ID's voor de vraag: "{st.session_state.huidige_vraag}"
+            filter_prompt = f"""
+Jij bent een archiefexpert. Selecteer de meest relevante Document_ID's voor de vraag: "{st.session_state.huidige_vraag}"
 
 {index_tekst}
 
-Selecteer maximaal {max_dossiers} Document_ID's. Geef UITSLUITEND de Document_ID's terug gescheiden door komma's, OF GEEN_MATCH.
+REGELS:
+1. Neem ALLES op wat te maken heeft met de vraag: boeken, besluiten, vergoedingen, én volmachten/persoonsakten van vertegenwoordigers of begunstigden (bijv. Denijs Gabrielle, Marius Denys, etc.).
+2. Selecteer maximaal {max_dossiers} Document_ID's.
+3. Geef UITSLUITEND de Document_ID's terug gescheiden door komma's.
 """
-                try:
-                    res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
-                    raw_text = res_filter.text.strip()
-                    if "geen_match" not in raw_text.lower():
-                        geselecteerde_ids = [d.strip() for d in raw_text.split(',') if d.strip()]
-                except Exception:
-                    pass
+            ai_matches = []
+            try:
+                res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
+                raw_text = res_filter.text.strip()
+                if "geen_match" not in raw_text.lower():
+                    ai_matches = [d.strip() for d in raw_text.split(',') if d.strip()]
+            except Exception:
+                pass
 
-            st.session_state.geselecteerde_doc_ids = geselecteerde_ids
+            # Samenvoegen (Unieke IDs behouden met prioriteit voor AI-geselecteerde relaties + directe matches)
+            gecombineerde_ids = []
+            for doc_id in ai_matches + directe_matches:
+                if doc_id in dossier_samenvattingen and doc_id not in gecombineerde_ids:
+                    gecombineerde_ids.append(doc_id)
+
+            st.session_state.geselecteerde_doc_ids = gecombineerde_ids[:max_dossiers]
 
         if not st.session_state.geselecteerde_doc_ids:
             st.warning("⚠️ Geen relevante documenten gevonden voor deze vraag.")
@@ -596,10 +587,11 @@ ONDERZOEKSVRAAG: {st.session_state.huidige_vraag}
 
 INSTRUCTIES VOOR JE RAPPORT:
 1. Richt je specifiek op de gevraagde thema's, personen, locaties, bedragen, boeken of documenten.
-2. Structureer je antwoord helder.
-3. Vermeld alle concrete feiten, namen, jaartallen en details die op de documenten staan.
-4. Citeer steeds de bestandsnaam (bijv. 'IMG20251205103451.jpg') wanneer je naar specifieke informatie op een document verwijst.
-5. Trek een heldere en duidelijke conclusie als antwoord op de vraag.
+2. Vermeld expliciet alle personen en gemachtigden (zoals Denijs Gabrielle, Marius Denys, etc.) en hun exacte rol bij uitbetalingen/schadeclaims.
+3. Structureer je antwoord helder.
+4. Vermeld alle concrete feiten, namen, jaartallen en details die op de documenten staan.
+5. Citeer steeds de bestandsnaam (bijv. 'DOC_0215') wanneer je naar specifieke informatie op een document verwijst.
+6. Trek een heldere en duidelijke conclusie als antwoord op de vraag.
 """
             payload = [onderzoeks_prompt]
             sheet_data = getattr(st.session_state, 'sheet_dossier_data', [])

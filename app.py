@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.5.1"
+APP_VERSION = "v3.5.2"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -143,7 +143,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: Wat staat er in het boek van Mathieu Rutten over de elektriciteitscentrale in Tongeren?',
+        placeholder='Bijv: Wat is het bedrag en wie ontvangt de oorlogsschade van de firma radio belge de construction?',
         height=100
     )
 with col2:
@@ -176,7 +176,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. SUPERSNELLE DOCUMENTEN SELECTIE & GEBUNDELDE DRIVE QUERY (~1-2 SEC)
+# 4. VOLLEDIGE INHOUD & CIJFERS SEARCH (HERSTELD & VOLLEDIG INCLUSIEF INHOUD-KOLOM)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -230,7 +230,14 @@ if st.session_state.start_zoekopdracht:
                     b_naam_val = str(row.get('Bestandsnaam', '')).strip()
                     personen_val = str(row.get('Genoemde Personen', '') or row.get('Genoemde personen', '')).strip()
                     onderwerp_val = str(row.get('Onderwerp (NL)', '') or row.get('Onderwerp', '')).strip()
-                    inhoud_val = str(row.get('Inhoud & Cijfers (NL)', '') or row.get('Inhoud & cijfers (NL)', '') or row.get('Inhoud', '')).strip()
+                    
+                    # HERSTELD: Inhoud & Cijfers expliciet en robuust uitlezen
+                    inhoud_val = str(
+                        row.get('Inhoud & Cijfers (NL)', '') or 
+                        row.get('Inhoud & cijfers (NL)', '') or 
+                        row.get('Inhoud', '') or
+                        row.get('Inhoud/Cijfers', '')
+                    ).strip()
                     
                     combi_tekst = f"{doc_id_val} {b_naam_val} {personen_val} {onderwerp_val} {inhoud_val}".lower()
                     gekozen_id = doc_id_val if doc_id_val else f"SINGLE_{b_naam_val}"
@@ -242,6 +249,10 @@ if st.session_state.start_zoekopdracht:
                     if matched_groepen_count == len(zoek_groepen): score += 10
                     if is_boek_vraag and any(b_term in combi_tekst for b_term in ['boek', 'omslag', 'publicatie', 'tijdschrift', 'weekblad']): score += 25
                     if any(v in combi_tekst for grp in zoek_groepen for v in grp if len(v) > 3) and any(f in combi_tekst for f in familie_termen): score += 8
+                    
+                    # Extra bonus voor sleutelwoorden rond financiën/oorlogsschade
+                    if any(term in combi_tekst for term in ['oorlogsschade', 'schadevergoeding', 'uitbetaling', 'frank', 'fr.']): 
+                        score += 15
 
                     if score > 0:
                         doc_scores[gekozen_id] = doc_scores.get(gekozen_id, 0) + score
@@ -254,7 +265,7 @@ if st.session_state.start_zoekopdracht:
             st.session_state.start_zoekopdracht = False
             st.stop()
 
-        # BUNDELING: 1 snelle API call maken i.p.v. 174 losse aanroepen
+        # BUNDELING: 1 snelle API call maken i.p.v. tientallen losse aanroepen
         sheet_dossier_data = []
         gezochte_bestanden = []
         
@@ -300,7 +311,7 @@ if st.session_state.start_zoekopdracht:
         st.rerun()
 
 # ------------------------------------------------------------------------------
-# 5. DIRECTE WEERGAVE VAN DE FOTOTEGELS (STRAK GEMETEN HOOGTE)
+# 5. WEERGAVE VAN DE FOTOTEGELS (EXACTE HOOGTE ZONDER OVERBODIGE WITRUIMTE)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas:
     st.divider()
@@ -533,7 +544,7 @@ if st.session_state.blader_paginas:
     </html>
     """
 
-    # Nauwkeurige hoogtemeting zonder overbodige witruimte
+    # Dynamische hoogte direct aangesloten op het aantal tegels
     aantal_tegels = len(tegel_items)
     aantal_rijen = math.ceil(aantal_tegels / 5) if aantal_tegels > 0 else 1
     berekende_hoogte = (aantal_rijen * 240) + 15
@@ -541,7 +552,7 @@ if st.session_state.blader_paginas:
     components.html(grid_html, height=berekende_hoogte, scrolling=False)
 
 # ------------------------------------------------------------------------------
-# 6. HISTORISCH RAPPORT & CHAT (OP DE ACHTERGROND NÁ DE TEGELS)
+# 6. HISTORISCH RAPPORT & CHAT
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas and not st.session_state.chat_historie:
     with st.spinner("Historische analyse uitvoeren op de geselecteerde documenten via Gemini..."):
@@ -554,7 +565,7 @@ if st.session_state.blader_paginas and not st.session_state.chat_historie:
             if len(st.session_state.blader_paginas) > MAX_FOTO_LIMIET:
                 tekst_gebundeld = f"\n--- DOSSIER INHOUD ({len(sheet_data)} PAGINA'S) ---\n"
                 for idx, r in enumerate(sheet_data, start=1):
-                    tekst_gebundeld += f"\n[Pagina {idx}] Bestand: {r.get('Bestandsnaam')} | Doc_ID: {r.get('Document_ID')}\n  - Personen: {r.get('Genoemde Personen', '')}\n  - Inhoud: {r.get('Inhoud & Cijfers (NL)', '')}\n"
+                    tekst_gebundeld += f"\n[Pagina {idx}] Bestand: {r.get('Bestandsnaam')} | Doc_ID: {r.get('Document_ID')}\n  - Personen: {r.get('Genoemde Personen', '')}\n  - Inhoud & Cijfers: {r.get('Inhoud & Cijfers (NL)', '') or r.get('Inhoud & cijfers (NL)', '')}\n"
                 payload.append(tekst_gebundeld)
             else:
                 for item in st.session_state.blader_paginas:

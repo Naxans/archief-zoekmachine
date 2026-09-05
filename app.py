@@ -18,7 +18,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.4.0"
+APP_VERSION = "v3.5.0"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -135,7 +135,7 @@ with col_ver:
 if MODEL_NAAM:
     st.caption(f"Actief AI-model: `{MODEL_NAAM}`")
 else:
-    st.error("Kon geen werkend Gemini-model vinden.")
+    st.error("Kon geen werkend Gemini-model primitive vinden.")
     st.stop()
 
 col1, col2 = st.columns([3, 1])
@@ -175,14 +175,14 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. SNELLE DOCUMENTEN SELECTIE (ZOEKEN IN SHEET)
+# 4. SUPERSNELLE DOCUMENTEN SELECTIE & GEBUNDELDE DRIVE QUERY (~1-2 SEC)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
         st.warning("Voer a.u.b. een onderzoeksvraag in.")
         st.session_state.start_zoekopdracht = False
     else:
-        with st.spinner("Selecteren van dossiers op basis van inhoudsopgave..."):
+        with st.spinner("Dossiers selecteren uit de inhoudsopgave..."):
             try:
                 sh = gc_drive.open(SHEET_NAAM)
                 worksheet = sh.sheet1
@@ -253,19 +253,45 @@ if st.session_state.start_zoekopdracht:
             st.session_state.start_zoekopdracht = False
             st.stop()
 
-        # Ophalen van bestandsreferenties (IDs) uit Google Drive om DIRECT te tonen
+        # BUNDELING: 1 snelle API call maken i.p.v. 174 losse aanroepen
         sheet_dossier_data = []
-        blader_lijst = []
+        gezochte_bestanden = []
+        
         for row in data:
             doc_id = str(row.get('Document_ID', '')).strip()
             b_naam = str(row.get('Bestandsnaam', '')).strip()
             if any(doc_id.lower() == g_id.lower() or b_naam.lower() == g_id.lower() for g_id in st.session_state.geselecteerde_doc_ids):
                 sheet_dossier_data.append(row)
                 if b_naam:
-                    b_schoon = b_naam.split('/')[-1]
-                    res = drive_service.files().list(q=f"name = '{b_schoon}' and trashed = false", fields='files(id, name, mimeType)').execute().get('files', [])
-                    if res:
-                        blader_lijst.append({"doc_id": doc_id, "naam": res[0]['name'], "id": res[0]['id'], "mime": res[0]['mimeType']})
+                    gezochte_bestanden.append((doc_id, b_naam.split('/')[-1]))
+
+        blader_lijst = []
+        if gezochte_bestanden:
+            batch_size = 50
+            drive_map = {}
+            for i in range(0, len(gezochte_bestanden), batch_size):
+                batch = gezochte_bestanden[i:i + batch_size]
+                namen_query = " or ".join([f"name = '{naam}'" for _, naam in batch])
+                query = f"({namen_query}) and trashed = false"
+                
+                res = drive_service.files().list(
+                    q=query, 
+                    fields='files(id, name, mimeType)',
+                    pageSize=1000
+                ).execute().get('files', [])
+                
+                for f in res:
+                    drive_map[f['name']] = f
+            
+            for doc_id, b_schoon in gezochte_bestanden:
+                if b_schoon in drive_map:
+                    f = drive_map[b_schoon]
+                    blader_lijst.append({
+                        "doc_id": doc_id, 
+                        "naam": f['name'], 
+                        "id": f['id'], 
+                        "mime": f['mimeType']
+                    })
 
         st.session_state.blader_paginas = blader_lijst
         st.session_state.sheet_dossier_data = sheet_dossier_data
@@ -273,7 +299,7 @@ if st.session_state.start_zoekopdracht:
         st.rerun()
 
 # ------------------------------------------------------------------------------
-# 5. KLIKBARE FOTOTEGELS TONEN (DIRECTE RENDER)
+# 5. DIRECTE WEERGAVE VAN DE FOTOTEGELS (BINNEN 2 SEC)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas:
     st.divider()

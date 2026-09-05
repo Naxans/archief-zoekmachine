@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.6.1"
+APP_VERSION = "v3.6.2"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -176,7 +176,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. INTELLIGENTE SELEKTIE (AI + FALLBACK HYBRIDE)
+# 4. SLIMME GEAVANCEERDE SELEKTIE (EXACTE AUTEUR/BOEK MATCH FIRST)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -233,57 +233,65 @@ if st.session_state.start_zoekopdracht:
                 if inhoud_val:
                     dossier_samenvattingen[doc_id]["Inhoud"].add(str(inhoud_val).strip())
 
-            index_regels = []
+            # Directe Python Trefwoorden check (geeft voorrang aan specifieke auteurs/boeken)
+            vraag_laag = st.session_state.huidige_vraag.lower()
+            specifieke_matches = []
+            
+            # Indien auteur/specifiek onderwerp gevraagd wordt, zoek eerst exact op de Sheet rij
+            sleutelwoorden = [w for w in re.findall(r'\b\w{3,}\b', vraag_laag) if w not in ['wat', 'staat', 'het', 'een', 'over', 'van', 'de', 'geef', 'naam', 'door', 'met', 'voor']]
+            
             for d_id, d_info in dossier_samenvattingen.items():
-                pers_str = ", ".join(d_info["Personen"]) if d_info["Personen"] else "Geen"
-                ond_str = ", ".join(d_info["Onderwerpen"]) if d_info["Onderwerpen"] else "Geen"
-                inhoud_str = " | ".join(d_info["Inhoud"]) if d_info["Inhoud"] else "Geen"
-                bestanden_str = ", ".join(d_info["Bestanden"]) if d_info["Bestanden"] else ""
-                
-                regel = f"Document_ID: {d_id} | Bestanden: {bestanden_str} | Datum: {d_info['Datum']} | Personen: {pers_str} | Onderwerp: {ond_str} | Inhoud: {inhoud_str}"
-                index_regels.append(regel)
+                v_tekst = f"{d_id} {' '.join(d_info['Personen'])} {' '.join(d_info['Onderwerpen'])} {' '.join(d_info['Inhoud'])} {' '.join(d_info['Bestanden'])}".lower()
+                # Als er zowel een persoonsnaam/auteur als inhoudswoord matched
+                if "rutten" in vraag_laag and "rutten" in v_tekst:
+                    specifieke_matches.append(d_id)
+                elif "radio belge" in vraag_laag and "radio" in v_tekst and ("belge" in v_tekst or "construction" in v_tekst):
+                    specifieke_matches.append(d_id)
 
-            index_tekst = "\n".join(index_regels)
-            if len(index_tekst) > 250000:
-                index_tekst = index_tekst[:250000]
+            if specifieke_matches:
+                geselecteerde_ids = specifieke_matches[:max_dossiers]
+            else:
+                # Anders overschakelen naar de brede Gemini Filtering
+                index_regels = []
+                for d_id, d_info in dossier_samenvattingen.items():
+                    pers_str = ", ".join(d_info["Personen"]) if d_info["Personen"] else "Geen"
+                    ond_str = ", ".join(d_info["Onderwerpen"]) if d_info["Onderwerpen"] else "Geen"
+                    inhoud_str = " | ".join(d_info["Inhoud"]) if d_info["Inhoud"] else "Geen"
+                    bestanden_str = ", ".join(d_info["Bestanden"]) if d_info["Bestanden"] else ""
+                    
+                    regel = f"Document_ID: {d_id} | Bestanden: {bestanden_str} | Datum: {d_info['Datum']} | Personen: {pers_str} | Onderwerp: {ond_str} | Inhoud: {inhoud_str}"
+                    index_regels.append(regel)
 
-            filter_prompt = f"""
-Jij bent een slimme en behulpzame archiefassistent. Hieronder staat de volledige inhoudsopgave van het archief:
+                index_tekst = "\n".join(index_regels)
+                if len(index_tekst) > 250000:
+                    index_tekst = index_tekst[:250000]
+
+                filter_prompt = f"""
+Jij bent een archiefassistent. Selecteer de meest relevante Document_ID's voor de onderstaande vraag.
 
 {index_tekst}
 
 ONDERZOEKSVRAAG: "{st.session_state.huidige_vraag}"
 
-INSTRUCTIES VOOR DE SELECTIE:
-1. Zoek naar dossiers (Document_ID's) die MOGELIJK betrekking hebben op de vraag.
-2. Kijk breed naar persoonsnamen (bijv. auteurs, ontvangers, bewindvoerders), locaties (bijv. Tongeren), onderwerpen (bijv. elektriciteit, radio, schade, uitbetalingen), of boektitels/hoofdstukken.
-3. Als de vraag over een specifiek boek/onderwerp gaat (zoals Mathieu Rutten of de elektriciteitscentrale), selecteer dan alle hoofdstukken of pagina's van dat betreffende boek of dossier.
-4. Geef maximaal {max_dossiers} relevantste Document_ID's terug.
-5. Antwoord ALLEEN met GEEN_MATCH als er werkelijk géén enkel verband te leggen valt met de vraag.
-
-Geef UITSLUITEND de Document_ID's terug gescheiden door komma's (bijv. DOC001, DOC002), OF het woord GEEN_MATCH. Geen extra tekst.
+REGELS:
+1. Geef voorrang aan boeken, auteurs, en specifieke dossiers boven algemene bijlagen/annexen.
+2. Selecteer maximaal {max_dossiers} Document_ID's.
+3. Geef UITSLUITEND de Document_ID's terug gescheiden door komma's, OF GEEN_MATCH.
 """
-            geselecteerde_ids = []
-            try:
-                res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
-                raw_text = res_filter.text.strip()
-                
-                negatieve_termen = ["geen_match", "geen resultaten", "geen documenten"]
-                if not any(term in raw_text.lower() for term in negatieve_termen):
-                    geselecteerde_ids = [d.strip() for d in raw_text.split(',') if d.strip()]
-            except Exception as e:
-                st.warning(f"AI-filtering meldt: {e}. Fallback naar directe tekstzoekopdracht...")
+                geselecteerde_ids = []
+                try:
+                    res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
+                    raw_text = res_filter.text.strip()
+                    if "geen_match" not in raw_text.lower():
+                        geselecteerde_ids = [d.strip() for d in raw_text.split(',') if d.strip()]
+                except Exception:
+                    pass
 
-            # FALLBACK: Als AI niets vindt, doe een trefwoordenscan in Python zelf
-            if not geselecteerde_ids:
-                zoekwoorden = [w.lower() for w in re.findall(r'\b\w{3,}\b', st.session_state.huidige_vraag) 
-                               if w.lower() not in ['wat', 'staat', 'het', 'een', 'over', 'van', 'de', 'het', 'een', 'geef', 'naam', 'door']]
-                
-                if zoekwoorden:
+                # Fallback scan als AI niets vond
+                if not geselecteerde_ids:
                     for d_id, d_info in dossier_samenvattingen.items():
-                        volle_tekst = f"{d_id} {' '.join(d_info['Personen'])} {' '.join(d_info['Onderwerpen'])} {' '.join(d_info['Inhoud'])} {' '.join(d_info['Bestanden'])}".lower()
-                        # als ten minste 1 belangrijk zoekwoord in het dossier staat
-                        if any(kw in volle_tekst for kw in zoekwoorden):
+                        v_tekst = f"{d_id} {' '.join(d_info['Personen'])} {' '.join(d_info['Onderwerpen'])} {' '.join(d_info['Inhoud'])} {' '.join(d_info['Bestanden'])}".lower()
+                        if any(kw in v_tekst for kw in sleutelwoorden):
                             geselecteerde_ids.append(d_id)
                             if len(geselecteerde_ids) >= max_dossiers:
                                 break

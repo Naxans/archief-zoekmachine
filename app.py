@@ -17,7 +17,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.9.0"
+APP_VERSION = "v3.0.0"
 APP_DATE = "2026"
 
 # SDK meldingen onderdrukken voor schone logs
@@ -104,8 +104,6 @@ if "bron_details" not in st.session_state:
     st.session_state.bron_details = []
 if "blader_paginas" not in st.session_state:
     st.session_state.blader_paginas = []
-if "huidige_pagina_index" not in st.session_state:
-    st.session_state.huidige_pagina_index = 0
 if "gestopt" not in st.session_state:
     st.session_state.gestopt = False
 if "start_zoekopdracht" not in st.session_state:
@@ -130,8 +128,8 @@ with st.sidebar:
 
     with st.expander("💡 Tips voor het testen"):
         st.markdown("""
-        * **Fullscreen Overlay:** Klik op **"🔎 Open document in viewer"** om de afbeeldingen op volledig scherm te bekijken.
-        * **Sneltoetsen:** Gebruik **`←`** en **`→`** op je toetsenbord om te bladeren, of **`ESC`** om te sluiten.
+        * **Klikbare Tegels:** Klik op een fototegel om de afbeelding direct op volledig scherm te bekijken.
+        * **Sneltoetsen:** Gebruik **`←`** en **`→`** op je toetsenbord om door de pagina's te bladeren, of **`ESC`** om de viewer te sluiten.
         """)
 
 # Titel op de hoofdpagina
@@ -172,7 +170,6 @@ if submit_button:
     st.session_state.chat_historie = []
     st.session_state.bron_details = []
     st.session_state.blader_paginas = []
-    st.session_state.huidige_pagina_index = 0
     st.session_state.start_zoekopdracht = True
     st.rerun()
 
@@ -375,145 +372,204 @@ if st.session_state.start_zoekopdracht:
         st.session_state.start_zoekopdracht = False
 
 # ------------------------------------------------------------------------------
-# 5. DIRECTE AFBEELDING OVERLAY VIEWER (FULLSCREEN GEMINI/DRIVE STYLE)
+# 5. KLIKBARE FOTOTEGELS & FULLSCREEN VIEWER
 # ------------------------------------------------------------------------------
 if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
     
-    unieke_dossiers = list(dict.fromkeys([p.get("doc_id", "Dossier 1") for p in st.session_state.blader_paginas if p.get("doc_id")]))
-    
-    with st.expander("📖 Geselecteerde bronnen / Documenten bekijken", expanded=True):
-        if len(unieke_dossiers) > 1:
-            gekozen_dossier = st.selectbox("📁 Selecteer document/boek om te bekijken:", options=unieke_dossiers, index=0)
-            actieve_paginas = [p for p in st.session_state.blader_paginas if p.get("doc_id") == gekozen_dossier]
-            actieve_paginas.sort(key=natuurlijke_sortering)
-        else:
-            actieve_paginas = st.session_state.blader_paginas
-            actieve_paginas.sort(key=natuurlijke_sortering)
+    st.divider()
+    st.subheader("🖼️ Geselecteerde Archiefdocumenten")
+    st.caption("Klik op een fototegel om het document op volledig scherm te openen in de viewer.")
 
-        st.write(f"Inhoud: **{len(actieve_paginas)} pagina('s)** beschikbaar.")
+    actieve_paginas = sorted(st.session_state.blader_paginas, key=natuurlijke_sortering)
+    paginas_json = json.dumps(actieve_paginas)
 
-        paginas_json = json.dumps(actieve_paginas)
+    grid_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{
+                margin: 0;
+                padding: 10px 0;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                background: transparent;
+            }}
+            .grid-container {{
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+                gap: 15px;
+                width: 100%;
+            }}
+            .tile {{
+                background: #ffffff;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+                overflow: hidden;
+                cursor: pointer;
+                transition: transform 0.2s, box-shadow 0.2s;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            }}
+            .tile:hover {{
+                transform: translateY(-3px);
+                box-shadow: 0 6px 15px rgba(0,0,0,0.15);
+                border-color: #1a73e8;
+            }}
+            .img-container {{
+                width: 100%;
+                height: 160px;
+                background-color: #f5f5f5;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                overflow: hidden;
+            }}
+            .img-container img {{
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+            }}
+            .tile-caption {{
+                padding: 8px;
+                font-size: 11px;
+                font-weight: 500;
+                color: #333;
+                text-align: center;
+                word-break: break-word;
+                line-height: 1.3;
+                width: 100%;
+                box-sizing: border-box;
+                background: #fafafa;
+                border-top: 1px solid #f0f0f0;
+            }}
+        </style>
+    </head>
+    <body>
 
-        fullscreen_overlay_html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                body {{ margin: 0; padding: 0; font-family: sans-serif; background: transparent; }}
-                .open-btn {{
-                    background-color: #1a73e8;
-                    color: white;
-                    border: none;
-                    padding: 10px 20px;
-                    font-size: 15px;
-                    font-weight: 500;
-                    border-radius: 6px;
-                    cursor: pointer;
-                    display: inline-flex;
-                    align-items: center;
-                    gap: 8px;
-                    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-                    transition: background-color 0.2s;
-                }}
-                .open-btn:hover {{ background-color: #1557b0; }}
-            </style>
-        </head>
-        <body>
+        <div class="grid-container" id="tile-grid"></div>
 
-            <button class="open-btn" onclick="openDriveOverlay()">
-                🔎 Open document in viewer (Volledig scherm)
-            </button>
+        <script>
+            const paginas = {paginas_json};
 
-            <script>
-                const paginas = {paginas_json};
-                let currentIndex = 0;
+            function renderTiles() {{
+                const grid = document.getElementById('tile-grid');
+                grid.innerHTML = '';
 
-                function openDriveOverlay() {{
-                    const topDoc = window.top.document;
+                paginas.forEach((item, index) => {{
+                    const tile = document.createElement('div');
+                    tile.className = 'tile';
+                    tile.onclick = () => openDriveOverlay(index);
+
+                    const imgUrl = `https://lh3.googleusercontent.com/d/${{item.id}}`;
                     
-                    const bestaandeModal = topDoc.getElementById('rbc-drive-modal');
-                    if (bestaandeModal) bestaandeModal.remove();
+                    // Toon bestandsnaam of Doc_ID onder de tegel
+                    const labelTekst = item.naam || item.doc_id || `Pagina ${{index + 1}}`;
 
-                    const modal = topDoc.createElement('div');
-                    modal.id = 'rbc-drive-modal';
-                    modal.style.cssText = `
-                        position: fixed;
-                        top: 0;
-                        left: 0;
-                        width: 100vw;
-                        height: 100vh;
-                        background-color: rgba(0, 0, 0, 0.92);
-                        backdrop-filter: blur(6px);
-                        z-index: 9999999;
-                        display: flex;
-                        flex-direction: column;
-                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                    `;
-
-                    modal.innerHTML = `
-                        <div id="rbc-top-bar" style="height: 56px; background: rgba(20,20,20,0.95); display: flex; align-items: center; padding: 0 20px; color: white; border-bottom: 1px solid rgba(255,255,255,0.1);">
-                            <button id="rbc-close-btn" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-right: 15px;" title="Sluiten (ESC)">✕</button>
-                            <div id="rbc-title-info" style="font-size: 15px; color: #e8eaed; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Laden...</div>
+                    tile.innerHTML = `
+                        <div class="img-container">
+                            <img src="${{imgUrl}}" loading="lazy" alt="${{labelTekst}}" />
                         </div>
-                        <div style="position: relative; flex: 1; width: 100%; height: calc(100vh - 56px); display: flex; align-items: center; justify-content: center; overflow: hidden;">
-                            <img id="rbc-img" style="max-width: 90%; max-height: 90%; object-fit: contain; border-radius: 4px; box-shadow: 0 0 25px rgba(0,0,0,0.8); transition: opacity 0.2s;" src="" />
-                            <div id="rbc-prev-btn" style="position: absolute; top: 50%; left: 20px; transform: translateY(-50%); width: 48px; height: 48px; background: rgba(30,30,30,0.8); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; font-size: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; z-index: 10;" title="Vorige pagina">&#8249;</div>
-                            <div id="rbc-next-btn" style="position: absolute; top: 50%; right: 20px; transform: translateY(-50%); width: 48px; height: 48px; background: rgba(30,30,30,0.8); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; font-size: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; z-index: 10;" title="Volgende pagina">&#8250;</div>
-                        </div>
+                        <div class="tile-caption">${{labelTekst}}</div>
                     `;
+                    grid.appendChild(tile);
+                }});
+            }}
 
-                    topDoc.body.appendChild(modal);
-                    topDoc.body.style.overflow = 'hidden';
+            function openDriveOverlay(startIndex) {{
+                const topDoc = window.top.document;
+                let currentIndex = startIndex;
 
-                    const imgEl = topDoc.getElementById('rbc-img');
-                    const titleInfo = topDoc.getElementById('rbc-title-info');
-                    const closeBtn = topDoc.getElementById('rbc-close-btn');
-                    const prevBtn = topDoc.getElementById('rbc-prev-btn');
-                    const nextBtn = topDoc.getElementById('rbc-next-btn');
+                const bestaandeModal = topDoc.getElementById('rbc-drive-modal');
+                if (bestaandeModal) bestaandeModal.remove();
 
-                    function updateViewer() {{
-                        if (paginas.length === 0) return;
-                        const item = paginas[currentIndex];
-                        
-                        imgEl.style.opacity = '0.3';
-                        imgEl.src = `https://lh3.googleusercontent.com/d/${{item.id}}`;
-                        imgEl.onload = () => {{ imgEl.style.opacity = '1'; }};
+                const modal = topDoc.createElement('div');
+                modal.id = 'rbc-drive-modal';
+                modal.style.cssText = `
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100vw;
+                    height: 100vh;
+                    background-color: rgba(0, 0, 0, 0.92);
+                    backdrop-filter: blur(6px);
+                    z-index: 9999999;
+                    display: flex;
+                    flex-direction: column;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                `;
 
-                        titleInfo.innerText = `${{item.naam}}  •  Pagina ${{currentIndex + 1}} van ${{paginas.length}}`;
+                modal.innerHTML = `
+                    <div id="rbc-top-bar" style="height: 56px; background: rgba(20,20,20,0.95); display: flex; align-items: center; padding: 0 20px; color: white; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                        <button id="rbc-close-btn" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-right: 15px;" title="Sluiten (ESC)">✕</button>
+                        <div id="rbc-title-info" style="font-size: 15px; color: #e8eaed; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Laden...</div>
+                    </div>
+                    <div style="position: relative; flex: 1; width: 100%; height: calc(100vh - 56px); display: flex; align-items: center; justify-content: center; overflow: hidden;">
+                        <img id="rbc-img" style="max-width: 90%; max-height: 90%; object-fit: contain; border-radius: 4px; box-shadow: 0 0 25px rgba(0,0,0,0.8); transition: opacity 0.2s;" src="" />
+                        <div id="rbc-prev-btn" style="position: absolute; top: 50%; left: 20px; transform: translateY(-50%); width: 48px; height: 48px; background: rgba(30,30,30,0.8); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; font-size: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; z-index: 10;" title="Vorige pagina">&#8249;</div>
+                        <div id="rbc-next-btn" style="position: absolute; top: 50%; right: 20px; transform: translateY(-50%); width: 48px; height: 48px; background: rgba(30,30,30,0.8); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; font-size: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; z-index: 10;" title="Volgende pagina">&#8250;</div>
+                    </div>
+                `;
 
-                        prevBtn.style.opacity = (currentIndex === 0) ? '0.2' : '1';
-                        prevBtn.style.pointerEvents = (currentIndex === 0) ? 'none' : 'auto';
+                topDoc.body.appendChild(modal);
+                topDoc.body.style.overflow = 'hidden';
 
-                        nextBtn.style.opacity = (currentIndex === paginas.length - 1) ? '0.2' : '1';
-                        nextBtn.style.pointerEvents = (currentIndex === paginas.length - 1) ? 'none' : 'auto';
-                    }}
+                const imgEl = topDoc.getElementById('rbc-img');
+                const titleInfo = topDoc.getElementById('rbc-title-info');
+                const closeBtn = topDoc.getElementById('rbc-close-btn');
+                const prevBtn = topDoc.getElementById('rbc-prev-btn');
+                const nextBtn = topDoc.getElementById('rbc-next-btn');
 
-                    function sluitModal() {{
-                        modal.remove();
-                        topDoc.body.style.overflow = 'auto';
-                        topDoc.removeEventListener('keydown', keyHandler);
-                    }}
+                function updateViewer() {{
+                    if (paginas.length === 0) return;
+                    const item = paginas[currentIndex];
+                    
+                    imgEl.style.opacity = '0.3';
+                    imgEl.src = `https://lh3.googleusercontent.com/d/${{item.id}}`;
+                    imgEl.onload = () => {{ imgEl.style.opacity = '1'; }};
 
-                    function keyHandler(e) {{
-                        if (e.key === 'Escape') sluitModal();
-                        if (e.key === 'ArrowLeft' && currentIndex > 0) {{ currentIndex--; updateViewer(); }}
-                        if (e.key === 'ArrowRight' && currentIndex < paginas.length - 1) {{ currentIndex++; updateViewer(); }}
-                    }}
+                    titleInfo.innerText = `${{item.naam}}  •  Pagina ${{currentIndex + 1}} van ${{paginas.length}}`;
 
-                    closeBtn.onclick = sluitModal;
-                    prevBtn.onclick = () => {{ if (currentIndex > 0) {{ currentIndex--; updateViewer(); }} }};
-                    nextBtn.onclick = () => {{ if (currentIndex < paginas.length - 1) {{ currentIndex++; updateViewer(); }} }};
+                    prevBtn.style.opacity = (currentIndex === 0) ? '0.2' : '1';
+                    prevBtn.style.pointerEvents = (currentIndex === 0) ? 'none' : 'auto';
 
-                    topDoc.addEventListener('keydown', keyHandler);
-
-                    updateViewer();
+                    nextBtn.style.opacity = (currentIndex === paginas.length - 1) ? '0.2' : '1';
+                    nextBtn.style.pointerEvents = (currentIndex === paginas.length - 1) ? 'none' : 'auto';
                 }}
-            </script>
-        </body>
-        </html>
-        """
 
-        components.html(fullscreen_overlay_html, height=60)
+                function sluitModal() {{
+                    modal.remove();
+                    topDoc.body.style.overflow = 'auto';
+                    topDoc.removeEventListener('keydown', keyHandler);
+                }}
+
+                function keyHandler(e) {{
+                    if (e.key === 'Escape') sluitModal();
+                    if (e.key === 'ArrowLeft' && currentIndex > 0) {{ currentIndex--; updateViewer(); }}
+                    if (e.key === 'ArrowRight' && currentIndex < paginas.length - 1) {{ currentIndex++; updateViewer(); }}
+                }}
+
+                closeBtn.onclick = sluitModal;
+                prevBtn.onclick = () => {{ if (currentIndex > 0) {{ currentIndex--; updateViewer(); }} }};
+                nextBtn.onclick = () => {{ if (currentIndex < paginas.length - 1) {{ currentIndex++; updateViewer(); }} }};
+
+                topDoc.addEventListener('keydown', keyHandler);
+
+                updateViewer();
+            }}
+
+            renderTiles();
+        </script>
+    </body>
+    </html>
+    """
+
+    # Bepaal dynamische hoogte van de HTML component op basis van het aantal tegels
+    aantal_items = len(actieve_paginas)
+    berekende_hoogte = max(240, ((aantal_items // 5) + 1) * 230)
+
+    components.html(grid_html, height=berekende_hoogte, scrolling=True)
 
 # ------------------------------------------------------------------------------
 # 6. HISTORISCH RAPPORT & CHAT

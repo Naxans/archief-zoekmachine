@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.6.0"
+APP_VERSION = "v3.6.1"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -176,14 +176,14 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. INTELLIGENTE SLIMME SELEKTIE VIA GEMINI FILTER
+# 4. INTELLIGENTE SELEKTIE (AI + FALLBACK HYBRIDE)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
         st.warning("Voer a.u.b. een onderzoeksvraag in.")
         st.session_state.start_zoekopdracht = False
     else:
-        with st.spinner("Stap 1/3: Inhoudsopgave (Google Sheet) scannen via AI..."):
+        with st.spinner("Stap 1/3: Inhoudsopgave (Google Sheet) scannen..."):
             try:
                 sh = gc_drive.open(SHEET_NAAM)
                 worksheet = sh.sheet1
@@ -202,21 +202,25 @@ if st.session_state.start_zoekopdracht:
             dossier_samenvattingen = {}
             for row in data:
                 doc_id = str(row.get('Document_ID', '')).strip()
+                b_naam = str(row.get('Bestandsnaam', '')).strip()
                 if not doc_id:
-                    doc_id = f"SINGLE_{row.get('Bestandsnaam', '').strip()}"
+                    doc_id = f"SINGLE_{b_naam}"
 
                 if doc_id not in dossier_samenvattingen:
                     dossier_samenvattingen[doc_id] = {
                         "Datum": row.get('Datum Document', 'Onbekend'),
                         "Personen": set(),
                         "Onderwerpen": set(),
-                        "Inhoud": set()
+                        "Inhoud": set(),
+                        "Bestanden": set()
                     }
                 
-                if row.get('Genoemde Personen'):
-                    dossier_samenvattingen[doc_id]["Personen"].add(str(row.get('Genoemde Personen')).strip())
-                if row.get('Onderwerp (NL)'):
-                    dossier_samenvattingen[doc_id]["Onderwerpen"].add(str(row.get('Onderwerp (NL)')).strip())
+                if b_naam:
+                    dossier_samenvattingen[doc_id]["Bestanden"].add(b_naam)
+                if row.get('Genoemde Personen') or row.get('Genoemde personen'):
+                    dossier_samenvattingen[doc_id]["Personen"].add(str(row.get('Genoemde Personen') or row.get('Genoemde personen')).strip())
+                if row.get('Onderwerp (NL)') or row.get('Onderwerp'):
+                    dossier_samenvattingen[doc_id]["Onderwerpen"].add(str(row.get('Onderwerp (NL)') or row.get('Onderwerp')).strip())
                 
                 inhoud_val = (
                     row.get('Inhoud & Cijfers (NL)') or 
@@ -234,8 +238,9 @@ if st.session_state.start_zoekopdracht:
                 pers_str = ", ".join(d_info["Personen"]) if d_info["Personen"] else "Geen"
                 ond_str = ", ".join(d_info["Onderwerpen"]) if d_info["Onderwerpen"] else "Geen"
                 inhoud_str = " | ".join(d_info["Inhoud"]) if d_info["Inhoud"] else "Geen"
+                bestanden_str = ", ".join(d_info["Bestanden"]) if d_info["Bestanden"] else ""
                 
-                regel = f"Document_ID: {d_id} | Datum: {d_info['Datum']} | Personen: {pers_str} | Onderwerp: {ond_str} | Inhoud: {inhoud_str}"
+                regel = f"Document_ID: {d_id} | Bestanden: {bestanden_str} | Datum: {d_info['Datum']} | Personen: {pers_str} | Onderwerp: {ond_str} | Inhoud: {inhoud_str}"
                 index_regels.append(regel)
 
             index_tekst = "\n".join(index_regels)
@@ -243,33 +248,47 @@ if st.session_state.start_zoekopdracht:
                 index_tekst = index_tekst[:250000]
 
             filter_prompt = f"""
-Jij bent een zeer strenge en nauwkeurige hoofdarchivaris. Hieronder staat een overzicht van de unieke dossiers (Document_ID's) in ons archief inclusief datum, personen, onderwerpen en inhoud/cijfers:
+Jij bent een slimme en behulpzame archiefassistent. Hieronder staat de volledige inhoudsopgave van het archief:
 
 {index_tekst}
 
 ONDERZOEKSVRAAG: "{st.session_state.huidige_vraag}"
 
-CRITISCHE SELECTIECRITERIA:
-1. Selecteer dossiers (Document_ID's) die een match hebben met de onderzoeksvraag (bijv. merknamen, modelnamen, personen, uitgekeerde bedragen, akten van overdracht/cessie, of specifieke onderwerpen).
-2. Let bij vragen over toekenning/uitbetaling van oorlogsschade specifiek op dossiers over beslissingen, uitbetalingen, overdrachten (cessie) of begunstigden/personen.
-3. Geef maximaal {max_dossiers} relevante Document_ID's terug.
-4. ALLES OF NIETS: Als er absoluut GEEN enkel dossier relevant is voor deze zoekopdracht, antwoord dan UITSLUITEND met het woord: GEEN_MATCH.
+INSTRUCTIES VOOR DE SELECTIE:
+1. Zoek naar dossiers (Document_ID's) die MOGELIJK betrekking hebben op de vraag.
+2. Kijk breed naar persoonsnamen (bijv. auteurs, ontvangers, bewindvoerders), locaties (bijv. Tongeren), onderwerpen (bijv. elektriciteit, radio, schade, uitbetalingen), of boektitels/hoofdstukken.
+3. Als de vraag over een specifiek boek/onderwerp gaat (zoals Mathieu Rutten of de elektriciteitscentrale), selecteer dan alle hoofdstukken of pagina's van dat betreffende boek of dossier.
+4. Geef maximaal {max_dossiers} relevantste Document_ID's terug.
+5. Antwoord ALLEEN met GEEN_MATCH als er werkelijk géén enkel verband te leggen valt met de vraag.
 
-Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's, OF het woord GEEN_MATCH. Geen extra uitleg of beleefdheid zinnen.
+Geef UITSLUITEND de Document_ID's terug gescheiden door komma's (bijv. DOC001, DOC002), OF het woord GEEN_MATCH. Geen extra tekst.
 """
+            geselecteerde_ids = []
             try:
                 res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
                 raw_text = res_filter.text.strip()
                 
-                negatieve_termen = ["geen_match", "geen resultaten", "geen documenten", "niets gevonden"]
-                if any(term in raw_text.lower() for term in negatieve_termen):
-                    st.session_state.geselecteerde_doc_ids = []
-                else:
-                    st.session_state.geselecteerde_doc_ids = [d.strip() for d in raw_text.split(',') if d.strip()]
+                negatieve_termen = ["geen_match", "geen resultaten", "geen documenten"]
+                if not any(term in raw_text.lower() for term in negatieve_termen):
+                    geselecteerde_ids = [d.strip() for d in raw_text.split(',') if d.strip()]
             except Exception as e:
-                st.error(f"Fout tijdens het scannen van de index: {e}")
-                st.session_state.start_zoekopdracht = False
-                st.stop()
+                st.warning(f"AI-filtering meldt: {e}. Fallback naar directe tekstzoekopdracht...")
+
+            # FALLBACK: Als AI niets vindt, doe een trefwoordenscan in Python zelf
+            if not geselecteerde_ids:
+                zoekwoorden = [w.lower() for w in re.findall(r'\b\w{3,}\b', st.session_state.huidige_vraag) 
+                               if w.lower() not in ['wat', 'staat', 'het', 'een', 'over', 'van', 'de', 'het', 'een', 'geef', 'naam', 'door']]
+                
+                if zoekwoorden:
+                    for d_id, d_info in dossier_samenvattingen.items():
+                        volle_tekst = f"{d_id} {' '.join(d_info['Personen'])} {' '.join(d_info['Onderwerpen'])} {' '.join(d_info['Inhoud'])} {' '.join(d_info['Bestanden'])}".lower()
+                        # als ten minste 1 belangrijk zoekwoord in het dossier staat
+                        if any(kw in volle_tekst for kw in zoekwoorden):
+                            geselecteerde_ids.append(d_id)
+                            if len(geselecteerde_ids) >= max_dossiers:
+                                break
+
+            st.session_state.geselecteerde_doc_ids = geselecteerde_ids
 
         if not st.session_state.geselecteerde_doc_ids:
             st.warning("⚠️ Geen relevante documenten gevonden voor deze vraag.")
@@ -573,11 +592,11 @@ Beantwoord de onderstaande onderzoeksvraag grondig en gedetailleerd op basis van
 ONDERZOEKSVRAAG: {st.session_state.huidige_vraag}
 
 INSTRUCTIES VOOR JE RAPPORT:
-1. Richt je specifiek op de gevraagde firma, personen, bedragen, modellen en periode.
+1. Richt je specifiek op de gevraagde thema's, personen, locaties, bedragen, boeken of documenten.
 2. Structureer je antwoord helder.
-3. Vermeld alle concrete namen (zoals overnemer/cessionaris, bewindvoerder, echtgenotes), functies, exacte bedragen (in cijfers en voluit) en details die op de documenten en aktes staan.
+3. Vermeld alle concrete feiten, namen, jaartallen en details die op de documenten staan.
 4. Citeer steeds de bestandsnaam (bijv. 'IMG20251205103451.jpg') wanneer je naar specifieke informatie op een document verwijst.
-5. Trek een heldere conclusie als antwoord op de vraag waarin je de exacte ontvanger en het definitieve bedrag samenvat.
+5. Trek een heldere en duidelijke conclusie als antwoord op de vraag.
 """
             payload = [onderzoeks_prompt]
             sheet_data = getattr(st.session_state, 'sheet_dossier_data', [])

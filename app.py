@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.6.7"
+APP_VERSION = "v3.6.8"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -185,7 +185,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. HERZIENE RANKING EN SCORING (INCLUSIEF I/Y SLIMME MATCHING)
+# 4. RANKING EN SCORING (INCLUSIEF FOTO, PDF & NORMALISATIE LOGICA)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -211,9 +211,10 @@ if st.session_state.start_zoekopdracht:
             # Normaliseer de onderzoeksvraag (lowercase + ij -> y)
             vraag_norm = normaliseer_tekst(st.session_state.huidige_vraag)
             
-            # Detecteer zoekintentie
+            # Detecteer zoekintenties
             is_schade_vraag = any(w in vraag_norm for w in ['schade', 'oorlogsschade', 'vergoeding', 'bedrag', 'uitgekeerd', 'frank', 'frs', 'betaald', 'firma'])
-            is_boek_vraag = any(w in vraag_norm for w in ['boek', 'rutten', 'mathieu', 'elektriciteitscentrale', 'geschreven'])
+            is_boek_vraag = any(w in vraag_norm for w in ['boek', 'rutten', 'mathieu', 'delvoie', 'elektriciteitscentrale', 'geschreven'])
+            is_radio_vraag = any(w in vraag_norm for w in ['radio', 'model', 'vedette', 'auditorium', 'classic', 'standard', 'grandluxe', 'royal'])
 
             dossier_scores = {}
 
@@ -231,16 +232,16 @@ if st.session_state.start_zoekopdracht:
 
                 score = 0
 
-                # 1. Boek / Mathieu Rutten matching
+                # 1. Boek / Mathieu Rutten / Delvoie matching
                 if is_boek_vraag:
-                    if 'rutten' in combi_tekst or 'mathieu' in combi_tekst:
+                    if 'rutten' in combi_tekst or 'mathieu' in combi_tekst or 'delvoie' in combi_tekst:
                         score += 100
                     if 'elektriciteit' in combi_tekst or 'centrale' in combi_tekst:
                         score += 50
                     if 'doc_0001' in doc_id.lower() or 'boek' in combi_tekst:
                         score += 40
 
-                # 2. Oorlogsschade / RBC matching
+                # 2. Oorlogsschade / RBC / Denijs matching
                 if is_schade_vraag:
                     if 'oorlogsschade' in combi_tekst or 'schadevergoeding' in combi_tekst or 'beschadiging' in combi_tekst:
                         score += 80
@@ -248,15 +249,21 @@ if st.session_state.start_zoekopdracht:
                         score += 60
                     if 'doc_0169' in doc_id.lower() or 'doc_0170' in doc_id.lower() or 'doc_0201' in doc_id.lower():
                         score += 100
-                    # Bestraf algemene kranten/weekbladen bij specifieke dossier-vragen
                     if 'totaal_16' in b_naam.lower() or 'radio-weekblad' in combi_tekst or 'annex' in b_naam.lower():
                         score -= 30
 
-                # Generieke trefwoord-score met 'ij/y' automatische ondersteuning
+                # 3. Radio modellen / Vedette / PDF documentatie matching
+                if is_radio_vraag:
+                    for model_kw in ['vedette', 'auditorium', 'classic', 'standard', 'grandluxe']:
+                        if model_kw in vraag_norm and model_kw in combi_tekst:
+                            score += 100
+
+                # Generieke trefwoord-score
+                stop_woorden = ['geef', 'naam', 'grootte', 'bedrag', 'staat', 'over', 'door', 'van', 'het', 'wat', 'weet', 'je', 'een', 'uit']
                 for woord in re.sub(r'[^\w\s]', ' ', vraag_norm).split():
-                    if len(woord) >= 3 and woord not in ['geef', 'naam', 'grootte', 'bedrag', 'staat', 'boek', 'over', 'door', 'van', 'het']:
+                    if len(woord) >= 3 and woord not in stop_woorden:
                         if woord in combi_tekst:
-                            score += 25
+                            score += 30
 
                 if score > 0:
                     dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + score
@@ -279,6 +286,9 @@ if st.session_state.start_zoekopdracht:
         for row in data:
             doc_id = str(row.get('Document_ID', '')).strip()
             b_naam = str(row.get('Bestandsnaam', '')).strip()
+            if not doc_id:
+                doc_id = f"SINGLE_{b_naam}"
+
             if any(doc_id.lower() == g_id.lower() or b_naam.lower() == g_id.lower() for g_id in st.session_state.geselecteerde_doc_ids):
                 sheet_dossier_data.append(row)
                 if b_naam:
@@ -570,11 +580,11 @@ Beantwoord de onderstaande onderzoeksvraag grondig en gedetailleerd op basis van
 ONDERZOEKSVRAAG: {st.session_state.huidige_vraag}
 
 INSTRUCTIES VOOR JE RAPPORT:
-1. Richt je specifiek op de gevraagde thema's, personen, locaties, bedragen, boeken of documenten.
+1. Richt je specifiek op de gevraagde thema's, personen, locaties, bedragen, boeken, radiomodellen of documenten.
 2. Vermeld expliciet ÁLLE betrokken namen van personen (bijv. eisers, gemachtigden, echtgenotes/weduwen zoals Gabrielle Denijs/Denys, bestuurders) én de officiële bedrijfsnamen.
 3. Als de vraag gaat over een schadeclaim of uitbetaling, vermeld dan het exacte bedrag, de verdeling en alle personen die genoemd worden in de relevante documenten.
 4. Structureer je antwoord helder met duidelijke kopjes en een conclusie.
-5. Citeer steeds de bestandsnaam (bijv. 'DOC_0170') wanneer je naar specifieke informatie verwijst.
+5. Citeer steeds de bestandsnaam (bijv. 'DOC_0170' of de specifieke PDF-naam) wanneer je naar specifieke informatie verwijst.
 """
             payload = [onderzoeks_prompt]
             sheet_data = getattr(st.session_state, 'sheet_dossier_data', [])
@@ -595,7 +605,7 @@ INSTRUCTIES VOOR JE RAPPORT:
 
             payload.append(tekst_gebundeld)
 
-            # 2. Voeg de daadwerkelijke visuele afbeeldingen/documenten toe aan de AI payload
+            # 2. Voeg de daadwerkelijke visuele afbeeldingen/PDF's toe aan de AI payload
             max_fotos = 25
             for item in st.session_state.blader_paginas[:max_fotos]:
                 try:

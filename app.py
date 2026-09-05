@@ -17,14 +17,12 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.1.0"
+APP_VERSION = "v3.2.0"
 APP_DATE = "2026"
 
-# SDK meldingen onderdrukken voor schone logs
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
 
-# Hulpfunctie voor 'natuurlijke sortering' (1 komt vóór 10, maakt geen verschil tussen 1 en 01)
 def natuurlijke_sortering(item):
     tekst = item.get('naam', '') if isinstance(item, dict) else str(item)
     return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', tekst)]
@@ -61,25 +59,21 @@ DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
 def bepaal_werkend_model(client):
-    """Test aliassen die ondersteund worden door jouw API-sleutel."""
     kandidaten = [
         'gemini-flash-lite-latest',
         'gemini-flash-latest'
     ]
-
     for model_naam in kandidaten:
         try:
             client.models.generate_content(model=model_naam, contents="ping")
             return model_naam
         except Exception:
             continue
-
     return 'gemini-flash-latest'
 
 MODEL_NAAM = bepaal_werkend_model(ai_client)
 
 def genereer_met_retry(client, model, contents, max_retries=4):
-    """Voert een API-call uit met wachttijd bij drukte of quota-limieten."""
     for poging in range(max_retries):
         try:
             return client.models.generate_content(model=model, contents=contents)
@@ -88,14 +82,13 @@ def genereer_met_retry(client, model, contents, max_retries=4):
             if "503" in err_msg or "UNAVAILABLE" in err_msg or "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
                 if poging < max_retries - 1:
                     wachttijd = 15 * (poging + 1)
-                    st.info(f"⏳ Google Gemini servers zijn druk of limiet bereikt ({'503 Overbelast' if '503' in err_msg else '429 Limiet'}). Automatische pauze van {wachttijd} seconden voor poging {poging + 2}/{max_retries}...")
+                    st.info(f"⏳ Google Gemini servers zijn druk of limiet bereikt. Automatische pauze van {wachttijd} seconden...")
                     time.sleep(wachttijd)
                     continue
                 else:
-                    st.error("⚠️ De limiet voor de Gemini API is tijdelijk bereikt of de servers zijn te druk. Wacht even 1-2 minuten en probeer het opnieuw.")
+                    st.error("⚠️ De limiet voor de Gemini API is tijdelijk bereikt of de servers zijn te druk. Wacht 1-2 minuten.")
             raise e
 
-# Session state variabelen
 if "actieve_chat" not in st.session_state:
     st.session_state.actieve_chat = None
 if "chat_historie" not in st.session_state:
@@ -108,6 +101,8 @@ if "gestopt" not in st.session_state:
     st.session_state.gestopt = False
 if "start_zoekopdracht" not in st.session_state:
     st.session_state.start_zoekopdracht = False
+if "geselecteerde_doc_ids" not in st.session_state:
+    st.session_state.geselecteerde_doc_ids = []
 
 # ------------------------------------------------------------------------------
 # 3. STREAMLIT INTERFACE & ZIJBALK
@@ -116,24 +111,21 @@ st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layou
 
 with st.sidebar:
     st.title("ℹ️ Help & Info")
-    
     with st.expander("🚨 Belangrijke informatie & Foutmeldingen"):
         st.markdown("""
         **1. Rood blok met foutmelding (bijv. 429 RESOURCE_EXHAUSTED)?**  
-        Deze zoekmachine maakt gebruik van een gratis AI-model met een dagelijks limiet op het aantal zoekopdrachten. Krijg je een melding over 'quota' of 'rate-limit'? Dan is het maximale aantal AI-scans voor vandaag bereikt. Probeer je zoekopdracht morgen opnieuw.
+        Deze zoekmachine maakt gebruik van een gratis AI-model met een dagelijks limiet. Krijg je een melding over 'quota'? Probeer het later opnieuw.
 
         **2. Houd rekening met mogelijke fouten in de AI-analyse**  
-        De AI kan incidenteel een verkeerde datum, naam of conclusie trekken. Controleer cruciale informatie altijd in het originele archiefdocument!
+        Controleer cruciale informatie altijd in het originele archiefdocument!
         """)
-
     with st.expander("💡 Tips voor het testen"):
         st.markdown("""
-        * **Klikbare Tegels:** Klik op een fototegel van een document om het te openen.
-        * **Bladeren:** Gebruik **`←`** en **`→`** op je toetsenbord om door de pagina's van het geopende document te bladeren.
-        * **Sluiten:** Druk op **`ESC`** om de viewer te sluiten.
+        * **Klikbare Tegels:** Klik op een fototegel om het document te openen.
+        * **Bladeren:** Gebruik **`←`** en **`→`** op je toetsenbord.
+        * **Sluiten:** Druk op **`ESC`**.
         """)
 
-# Titel op de hoofdpagina
 col_title, col_ver = st.columns([4, 1])
 with col_title:
     st.title("🔍 RBC Archief zoekmachine")
@@ -143,10 +135,9 @@ with col_ver:
 if MODEL_NAAM:
     st.caption(f"Actief AI-model: `{MODEL_NAAM}`")
 else:
-    st.error("Kon geen werkend Gemini-model vinden voor deze API-sleutel. Controleer je Gemini API key.")
+    st.error("Kon geen werkend Gemini-model vinden voor deze API-sleutel.")
     st.stop()
 
-# Invoer
 col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
@@ -157,20 +148,19 @@ with col1:
 with col2:
     max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=10, step=5)
 
-# Knoppenbalk
 btn_col1, btn_col2 = st.columns([2, 1])
 with btn_col1:
     submit_button = st.button("🔍 Voer onderzoek uit", type="primary", use_container_width=True)
 with btn_col2:
     stop_button = st.button("⛔ Stop / Annuleer", type="secondary", use_container_width=True)
 
-# Reset bij zoeken
 if submit_button:
     st.session_state.gestopt = False
     st.session_state.actieve_chat = None
     st.session_state.chat_historie = []
     st.session_state.bron_details = []
     st.session_state.blader_paginas = []
+    st.session_state.geselecteerde_doc_ids = []
     st.session_state.start_zoekopdracht = True
     st.rerun()
 
@@ -210,7 +200,6 @@ if st.session_state.start_zoekopdracht:
 
             geselecteerde_doc_ids = []
 
-            # Matchingslogica
             negeer_woorden = [
                 'geef', 'alle', 'over', 'radio', 'model', 'voor', 'naar', 'van', 'informatie', 
                 'weet', 'welke', 'zoek', 'vind', 'wat', 'is', 'de', 'het', 'een', 'wanneer', 
@@ -293,6 +282,8 @@ if st.session_state.start_zoekopdracht:
             st.session_state.start_zoekopdracht = False
             st.stop()
 
+        st.session_state.geselecteerde_doc_ids = geselecteerde_doc_ids
+
         # Verzamel bestanden
         eind_bestanden_lijst = []
         sheet_dossier_data = []
@@ -304,13 +295,6 @@ if st.session_state.start_zoekopdracht:
                 sheet_dossier_data.append(row)
                 if b_naam and b_naam not in eind_bestanden_lijst:
                     eind_bestanden_lijst.append(b_naam)
-
-        # Natuurlijke sortering van bestanden
-        eind_bestanden_lijst.sort(key=natuurlijke_sortering)
-
-        with st.expander("🔍 Details van de geselecteerde documenten", expanded=True):
-            st.write(f"**Geselecteerde Document_ID's:** `{geselecteerde_doc_ids}`")
-            st.write(f"**Aantal pagina's/bestanden:** `{len(eind_bestanden_lijst)} items`")
 
         MAX_FOTO_LIMIET = 10
         onderzoeks_payload = [f"Analyseer voor de onderzoeksvraag: {onderzoeksvraag}"]
@@ -333,7 +317,6 @@ if st.session_state.start_zoekopdracht:
                             if res:
                                 blader_lijst.append({"doc_id": d_id, "naam": res[0]['name'], "id": res[0]['id'], "mime": res[0]['mimeType']})
 
-                blader_lijst.sort(key=natuurlijke_sortering)
                 st.session_state.blader_paginas = blader_lijst
 
         else:
@@ -359,8 +342,6 @@ if st.session_state.start_zoekopdracht:
 
                         onderzoeks_payload.append(types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/jpeg'))
 
-                st.session_state.blader_paginas.sort(key=natuurlijke_sortering)
-
         # Gemini Analyse
         with st.spinner("Historische analyse uitvoeren via Gemini..."):
             try:
@@ -373,38 +354,43 @@ if st.session_state.start_zoekopdracht:
         st.session_state.start_zoekopdracht = False
 
 # ------------------------------------------------------------------------------
-# 5. KLIKBARE FOTOTEGELS (ENKEL EERSTE PAGINA PER DOSSIER) & FULLSCREEN VIEWER
+# 5. KLIKBARE FOTOTEGELS & FULLSCREEN VIEWER (GESORTEERD OP RELEVENTIE)
 # ------------------------------------------------------------------------------
 if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
     
     st.divider()
-    st.subheader("🖼️ Geselecteerde Archiefdocumenten")
-    st.caption("Klik op de eerste pagina van een document om de volledige inhoud te openen in de viewer.")
-
-    # Alle pagina's natuurlijk sorteren
-    alle_paginas = sorted(st.session_state.blader_paginas, key=natuurlijke_sortering)
-
+    
     # 1. Groepeer pagina's per Document_ID / Dossier
     dossiers_dict = {}
-    for p in alle_paginas:
+    for p in st.session_state.blader_paginas:
         d_id = p.get("doc_id", "Dossier_Onbekend")
         if d_id not in dossiers_dict:
             dossiers_dict[d_id] = []
         dossiers_dict[d_id].append(p)
 
-    # 2. Maak tegels-lijst met ENKEL de eerste pagina per dossier
+    # Binnen elk dossier de pagina's op volgorde sorteren
+    for d_id in dossiers_dict:
+        dossiers_dict[d_id].sort(key=natuurlijke_sortering)
+
+    # 2. Maak tegels-lijst IN VOLGORDE VAN AI-RELEVENTIE (st.session_state.geselecteerde_doc_ids)
     tegel_items = []
-    for d_id, pagina_lijst in dossiers_dict.items():
-        eerste_pagina = pagina_lijst[0].copy()
-        
-        # Label opmaken voor onder de tegel
-        aantal_pags = len(pagina_lijst)
-        if aantal_pags > 1:
-            eerste_pagina["display_label"] = f"{d_id} ({aantal_pags} pag.)"
-        else:
-            eerste_pagina["display_label"] = d_id
+    volgorde_ids = st.session_state.geselecteerde_doc_ids if st.session_state.geselecteerde_doc_ids else list(dossiers_dict.keys())
+
+    for d_id in volgorde_ids:
+        if d_id in dossiers_dict and dossiers_dict[d_id]:
+            pagina_lijst = dossiers_dict[d_id]
+            eerste_pagina = pagina_lijst[0].copy()
             
-        tegel_items.append(eerste_pagina)
+            aantal_pags = len(pagina_lijst)
+            if aantal_pags > 1:
+                eerste_pagina["display_label"] = f"{d_id} ({aantal_pags} pag.)"
+            else:
+                eerste_pagina["display_label"] = d_id
+                
+            tegel_items.append(eerste_pagina)
+
+    st.subheader(f"🖼️ Geselecteerde Archiefdocumenten ({len(tegel_items)} dossiers • {len(st.session_state.blader_paginas)} pagina's)")
+    st.caption("Klik op een tegel om het hele document/boek te openen in de viewer.")
 
     tegels_json = json.dumps(tegel_items)
     alle_dossiers_json = json.dumps(dossiers_dict)
@@ -505,7 +491,6 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
             function openDriveOverlay(docId) {{
                 const topDoc = window.top.document;
                 
-                // Haal ALLE pagina's op van DIT specifieke document/dossier
                 const dossierPaginas = alleDossiers[docId] || [];
                 let currentIndex = 0;
 

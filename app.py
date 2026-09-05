@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.7.1"
+APP_VERSION = "v3.8.0"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -151,7 +151,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: geef me de naam en de grootte van het bedrag dat werd betaald door oorlogsschade',
+        placeholder='Bijv: wie waren de bestuursleden van de firma radio belge de construction in 1936',
         height=100
     )
 with col2:
@@ -184,7 +184,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. RANKING EN SCORING
+# 4. RANKING EN SCORING (UITGEBREID VOOR STAATSBLADEN & BESTUURSLEDEN)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -209,9 +209,10 @@ if st.session_state.start_zoekopdracht:
 
             vraag_norm = normaliseer_tekst(st.session_state.huidige_vraag)
             
-            is_schade_vraag = any(w in vraag_norm for w in ['schade', 'oorlogsschade', 'vergoeding', 'bedrag', 'uitgekeerd', 'frank', 'frs', 'betaald', 'firma', 'persoon', 'naam', 'wie'])
+            is_schade_vraag = any(w in vraag_norm for w in ['schade', 'oorlogsschade', 'vergoeding', 'bedrag', 'uitgekeerd', 'frank', 'frs', 'betaald'])
             is_boek_vraag = any(w in vraag_norm for w in ['boek', 'rutten', 'mathieu', 'delvoie', 'elektriciteitscentrale', 'geschreven'])
             is_radio_vraag = any(w in vraag_norm for w in ['radio', 'model', 'vedette', 'auditorium', 'classic', 'standard', 'grandluxe', 'royal', 'record'])
+            is_bestuur_vraag = any(w in vraag_norm for w in ['bestuur', 'bestuurslid', 'bestuursleden', 'directeur', 'oprichting', 'staatsblad', 'statuten', 'stichter', 'aandeelhouder', 'raad van bestuur'])
 
             dossier_scores = {}
 
@@ -229,7 +230,15 @@ if st.session_state.start_zoekopdracht:
 
                 score = 0
 
-                if is_boek_vraag:
+                if is_bestuur_vraag:
+                    if any(w in combi_tekst for w in ['staatsblad', 'moniteur', 'oprichting', 'statuten', 'bijlagen', 'actes']):
+                        score += 200
+                    if any(w in combi_tekst for w in ['bestuur', 'beheerder', 'administrateur', 'benoeming', 'raad']):
+                        score += 100
+                    if '1936' in vraag_norm and '1936' in combi_tekst:
+                        score += 80
+
+                elif is_boek_vraag:
                     if 'rutten' in combi_tekst or 'mathieu' in combi_tekst or 'delvoie' in combi_tekst:
                         score += 100
                     if 'elektriciteit' in combi_tekst or 'centrale' in combi_tekst:
@@ -269,7 +278,7 @@ if st.session_state.start_zoekopdracht:
                         score -= 150
 
                 else:
-                    stop_woorden = ['geef', 'naam', 'grootte', 'bedrag', 'staat', 'over', 'door', 'van', 'het', 'wat', 'weet', 'je', 'een', 'uit', 'radio', 'model']
+                    stop_woorden = ['geef', 'naam', 'grootte', 'bedrag', 'staat', 'over', 'door', 'van', 'het', 'wat', 'weet', 'je', 'een', 'uit', 'radio', 'model', 'wie', 'waren']
                     for woord in re.sub(r'[^\w\s]', ' ', vraag_norm).split():
                         if len(woord) >= 3 and woord not in stop_woorden:
                             if woord in combi_tekst:
@@ -578,7 +587,7 @@ if st.session_state.blader_paginas:
     components.html(grid_html, height=berekende_hoogte, scrolling=False)
 
 # ------------------------------------------------------------------------------
-# 6. GECOMBINEERDE VISUELE & METADATA ANALYSE VIA GEMINI (MET EXTRA HARDENING)
+# 6. GECOMBINEERDE VISUELE & METADATA ANALYSE VIA GEMINI
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas and not st.session_state.chat_historie:
     with st.spinner("Stap 3/3: Historische en visuele analyse uitvoeren via Gemini..."):
@@ -591,8 +600,8 @@ ONDERZOEKSVRAAG: {st.session_state.huidige_vraag}
 
 INSTRUCTIES VOOR JE RAPPORT:
 1. Richt je specifiek op de gevraagde thema's, personen, locaties, bedragen, boeken, radiomodellen of documenten.
-2. Vermeld expliciet ÁLLE betrokken namen van personen (bijv. eisers, gemaaktigden, echtgenotes/weduwen zoals Gabrielle Denijs/Denys, bestuurders) én de officiële bedrijfsnamen.
-3. Als de vraag gaat over een schadeclaim of uitbetaling, vermeld dan het exacte bedrag, de verdeling en alle personen die genoemd worden in de relevante documenten.
+2. Vermeld expliciet ÁLLE betrokken namen van personen (bijv. eisers, gemachtigden, bestuurders, oprichters) én de officiële bedrijfsnamen.
+3. Als de vraag gaat over bestuursleden of de raad van bestuur, vermeld dan hun specifieke functies (voorzitter, beheerder, afgevaardigd bestuurder) indien bekend.
 4. Structureer je antwoord helder met duidelijke kopjes en een conclusie.
 5. Citeer steeds de bestandsnaam (bijv. 'DOC_0170', 'DOC_0237' of de specifieke PDF-naam) wanneer je naar specifieke informatie verwijst.
 """
@@ -615,7 +624,7 @@ INSTRUCTIES VOOR JE RAPPORT:
 
             payload.append(tekst_gebundeld)
 
-            # 2. Voeg de afbeelden gecontroleerd toe (maximaal 15 afbeeldingen, sterker verkleind)
+            # 2. Voeg de afbeeldingen gecontroleerd toe
             max_fotos = 15
             geüploade_fotos = 0
 
@@ -636,7 +645,6 @@ INSTRUCTIES VOOR JE RAPPORT:
                         if img.mode != 'RGB':
                             img = img.convert('RGB')
                         
-                        # Schaal sterker af naar 600px om te voorkomen dat het geheugen/payload limiet overschreden wordt
                         img.thumbnail((600, 600))
                         img_byte_arr = io.BytesIO()
                         img.save(img_byte_arr, format='JPEG', quality=65)
@@ -648,7 +656,6 @@ INSTRUCTIES VOOR JE RAPPORT:
                         
                         del img; del f_data; del img_byte_arr
                 except Exception as img_err:
-                    # Sla problematische afbeeldingen stilletjes over i.p.v. dat de app crasht
                     continue
 
             st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)

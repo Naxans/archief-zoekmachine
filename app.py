@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.6.2"
+APP_VERSION = "v3.6.3"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -176,7 +176,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. SLIMME GEAVANCEERDE SELEKTIE (EXACTE AUTEUR/BOEK MATCH FIRST)
+# 4. WATERDICHTE SELEKTIE (GEAVANCEERDE SCORE-FILTERING)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -233,25 +233,37 @@ if st.session_state.start_zoekopdracht:
                 if inhoud_val:
                     dossier_samenvattingen[doc_id]["Inhoud"].add(str(inhoud_val).strip())
 
-            # Directe Python Trefwoorden check (geeft voorrang aan specifieke auteurs/boeken)
-            vraag_laag = st.session_state.huidige_vraag.lower()
-            specifieke_matches = []
-            
-            # Indien auteur/specifiek onderwerp gevraagd wordt, zoek eerst exact op de Sheet rij
-            sleutelwoorden = [w for w in re.findall(r'\b\w{3,}\b', vraag_laag) if w not in ['wat', 'staat', 'het', 'een', 'over', 'van', 'de', 'geef', 'naam', 'door', 'met', 'voor']]
-            
-            for d_id, d_info in dossier_samenvattingen.items():
-                v_tekst = f"{d_id} {' '.join(d_info['Personen'])} {' '.join(d_info['Onderwerpen'])} {' '.join(d_info['Inhoud'])} {' '.join(d_info['Bestanden'])}".lower()
-                # Als er zowel een persoonsnaam/auteur als inhoudswoord matched
-                if "rutten" in vraag_laag and "rutten" in v_tekst:
-                    specifieke_matches.append(d_id)
-                elif "radio belge" in vraag_laag and "radio" in v_tekst and ("belge" in v_tekst or "construction" in v_tekst):
-                    specifieke_matches.append(d_id)
+            # Genormaliseerde trefwoordenscan met scoring
+            vraag_schoon = re.sub(r'[^\w\s]', ' ', st.session_state.huidige_vraag.lower())
+            negeer_woorden = {'wat', 'staat', 'het', 'een', 'over', 'van', 'de', 'geef', 'naam', 'door', 'met', 'voor', 'boek', 'geschreven'}
+            zoek_termen = [w for w in vraag_schoon.split() if len(w) >= 3 and w not in negeer_woorden]
 
-            if specifieke_matches:
-                geselecteerde_ids = specifieke_matches[:max_dossiers]
+            dossier_scores = {}
+            for d_id, d_info in dossier_samenvattingen.items():
+                volle_tekst = f"{d_id} {' '.join(d_info['Personen'])} {' '.join(d_info['Onderwerpen'])} {' '.join(d_info['Inhoud'])} {' '.join(d_info['Bestanden'])}".lower()
+                
+                score = 0
+                for term in zoek_termen:
+                    if term in volle_tekst:
+                        score += 2
+                        # Extra bonus als de term in persoonsnamen of onderwerpen staat
+                        if any(term in p.lower() for p in d_info['Personen']):
+                            score += 5
+                        if any(term in o.lower() for o in d_info['Onderwerpen']):
+                            score += 3
+                
+                if score > 0:
+                    dossier_scores[d_id] = score
+
+            if dossier_scores:
+                # Sorteer dossiers op basis van hoogste matchingscore
+                gesorteerde_dossiers = sorted(dossier_scores.keys(), key=lambda k: dossier_scores[k], reverse=True)
+                geselecteerde_ids = gesorteerde_dossiers[:max_dossiers]
             else:
-                # Anders overschakelen naar de brede Gemini Filtering
+                geselecteerde_ids = []
+
+            # Als de scoring niks oplevert, vraag Gemini als fallback
+            if not geselecteerde_ids:
                 index_regels = []
                 for d_id, d_info in dossier_samenvattingen.items():
                     pers_str = ", ".join(d_info["Personen"]) if d_info["Personen"] else "Geen"
@@ -262,23 +274,15 @@ if st.session_state.start_zoekopdracht:
                     regel = f"Document_ID: {d_id} | Bestanden: {bestanden_str} | Datum: {d_info['Datum']} | Personen: {pers_str} | Onderwerp: {ond_str} | Inhoud: {inhoud_str}"
                     index_regels.append(regel)
 
-                index_tekst = "\n".join(index_regels)
-                if len(index_tekst) > 250000:
-                    index_tekst = index_tekst[:250000]
+                index_tekst = "\n".join(index_regels)[:250000]
 
                 filter_prompt = f"""
-Jij bent een archiefassistent. Selecteer de meest relevante Document_ID's voor de onderstaande vraag.
+Jij bent een archiefassistent. Selecteer de meest relevante Document_ID's voor de vraag: "{st.session_state.huidige_vraag}"
 
 {index_tekst}
 
-ONDERZOEKSVRAAG: "{st.session_state.huidige_vraag}"
-
-REGELS:
-1. Geef voorrang aan boeken, auteurs, en specifieke dossiers boven algemene bijlagen/annexen.
-2. Selecteer maximaal {max_dossiers} Document_ID's.
-3. Geef UITSLUITEND de Document_ID's terug gescheiden door komma's, OF GEEN_MATCH.
+Selecteer maximaal {max_dossiers} Document_ID's. Geef UITSLUITEND de Document_ID's terug gescheiden door komma's, OF GEEN_MATCH.
 """
-                geselecteerde_ids = []
                 try:
                     res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
                     raw_text = res_filter.text.strip()
@@ -286,15 +290,6 @@ REGELS:
                         geselecteerde_ids = [d.strip() for d in raw_text.split(',') if d.strip()]
                 except Exception:
                     pass
-
-                # Fallback scan als AI niets vond
-                if not geselecteerde_ids:
-                    for d_id, d_info in dossier_samenvattingen.items():
-                        v_tekst = f"{d_id} {' '.join(d_info['Personen'])} {' '.join(d_info['Onderwerpen'])} {' '.join(d_info['Inhoud'])} {' '.join(d_info['Bestanden'])}".lower()
-                        if any(kw in v_tekst for kw in sleutelwoorden):
-                            geselecteerde_ids.append(d_id)
-                            if len(geselecteerde_ids) >= max_dossiers:
-                                break
 
             st.session_state.geselecteerde_doc_ids = geselecteerde_ids
 

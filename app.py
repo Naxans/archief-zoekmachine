@@ -513,3 +513,81 @@ if st.session_state.blader_paginas:
                     imgEl.onload = () => {{ imgEl.style.opacity = '1'; }};
 
                     titleInfo.innerText = `${{item.naam}}  •  Pagina ${{currentIndex + 1}} van ${{dossierPaginas.length}}`;
+
+                    prevBtn.style.opacity = (currentIndex === 0) ? '0.2' : '1';
+                    prevBtn.style.pointerEvents = (currentIndex === 0) ? 'none' : 'auto';
+
+                    nextBtn.style.opacity = (currentIndex === dossierPaginas.length - 1) ? '0.2' : '1';
+                    nextBtn.style.pointerEvents = (currentIndex === dossierPaginas.length - 1) ? 'none' : 'auto';
+                }}
+
+                function sluitModal() {{
+                    modal.remove();
+                    topDoc.body.style.overflow = 'auto';
+                    topDoc.removeEventListener('keydown', keyHandler);
+                }}
+
+                function keyHandler(e) {{
+                    if (e.key === 'Escape') sluitModal();
+                    if (e.key === 'ArrowLeft' && currentIndex > 0) {{ currentIndex--; updateViewer(); }}
+                    if (e.key === 'ArrowRight' && currentIndex < dossierPaginas.length - 1) {{ currentIndex++; updateViewer(); }}
+                }}
+
+                closeBtn.onclick = sluitModal;
+                prevBtn.onclick = () => {{ if (currentIndex > 0) {{ currentIndex--; updateViewer(); }} }};
+                nextBtn.onclick = () => {{ if (currentIndex < dossierPaginas.length - 1) {{ currentIndex++; updateViewer(); }} }};
+
+                topDoc.addEventListener('keydown', keyHandler);
+
+                updateViewer();
+            }}
+
+            renderTiles();
+        </script>
+    </body>
+    </html>
+    """
+
+    aantal_tegels = len(tegel_items)
+    berekende_hoogte = max(260, ((aantal_tegels // 5) + 1) * 250)
+    components.html(grid_html, height=berekende_hoogte, scrolling=True)
+
+# ------------------------------------------------------------------------------
+# 6. HISTORISCH RAPPORT & CHAT (VOERT NÁ HET TONEN VAN DE TEGELS DE GEMINI-ANALYSE UIT)
+# ------------------------------------------------------------------------------
+if st.session_state.onderzoeks_payload and not st.session_state.chat_historie:
+    with st.spinner("Historische analyse uitvoeren via Gemini..."):
+        try:
+            st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
+            analyse_response = genereer_met_retry(ai_client, MODEL_NAAM, st.session_state.onderzoeks_payload)
+            st.session_state.chat_historie.append(("assistant", analyse_response.text))
+            
+            # Ruim het zware payload-object meteen op uit het geheugen
+            st.session_state.onderzoeks_payload = None
+            gc.collect()
+            
+            st.rerun()
+        except Exception as e:
+            st.error(f"Fout tijdens analyse: {e}")
+
+if st.session_state.chat_historie:
+    st.divider()
+    st.subheader("📑 Historisch Onderzoeksrapport")
+    
+    for rol, tekst in st.session_state.chat_historie:
+        with st.chat_message(rol):
+            st.write(tekst)
+
+    if vervolgvraag := st.chat_input("Stel een vervolgvraag over dit rapport of boek..."):
+        st.session_state.chat_historie.append(("user", vervolgvraag))
+        with st.chat_message("user"):
+            st.write(vervolgvraag)
+            
+        with st.chat_message("assistant"):
+            with st.spinner("Analyseren..."):
+                try:
+                    response = st.session_state.actieve_chat.send_message(vervolgvraag)
+                    st.write(response.text)
+                    st.session_state.chat_historie.append(("assistant", response.text))
+                except Exception as e:
+                    st.error(f"Fout bij verwerken vervolgvraag: {e}")

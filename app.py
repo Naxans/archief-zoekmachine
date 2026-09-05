@@ -17,7 +17,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.2.0"
+APP_VERSION = "v3.3.0"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -284,7 +284,7 @@ if st.session_state.start_zoekopdracht:
 
         st.session_state.geselecteerde_doc_ids = geselecteerde_doc_ids
 
-        # Verzamel bestanden
+        # Verzamel bestanden uit Drive
         eind_bestanden_lijst = []
         sheet_dossier_data = []
 
@@ -342,7 +342,10 @@ if st.session_state.start_zoekopdracht:
 
                         onderzoeks_payload.append(types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/jpeg'))
 
-        # Gemini Analyse
+        # De bestanden zijn opgeladen: stop het zoekproces zodat de tegels GETOOND kunnen worden
+        st.session_state.start_zoekopdracht = False
+
+        # Gemini Analyse direct starten
         with st.spinner("Historische analyse uitvoeren via Gemini..."):
             try:
                 st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
@@ -351,16 +354,16 @@ if st.session_state.start_zoekopdracht:
             except Exception as e:
                 st.error(f"Fout tijdens analyse: {e}")
 
-        st.session_state.start_zoekopdracht = False
+        st.rerun()
 
 # ------------------------------------------------------------------------------
-# 5. KLIKBARE FOTOTEGELS & FULLSCREEN VIEWER (GESORTEERD OP RELEVENTIE)
+# 5. KLIKBARE FOTOTEGELS & FULLSCREEN VIEWER (WORDT DIRECT GETOOND)
 # ------------------------------------------------------------------------------
-if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
+if st.session_state.blader_paginas:
     
     st.divider()
     
-    # 1. Groepeer pagina's per Document_ID / Dossier
+    # Groepeer pagina's per Document_ID / Dossier
     dossiers_dict = {}
     for p in st.session_state.blader_paginas:
         d_id = p.get("doc_id", "Dossier_Onbekend")
@@ -368,11 +371,10 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
             dossiers_dict[d_id] = []
         dossiers_dict[d_id].append(p)
 
-    # Binnen elk dossier de pagina's op volgorde sorteren
     for d_id in dossiers_dict:
         dossiers_dict[d_id].sort(key=natuurlijke_sortering)
 
-    # 2. Maak tegels-lijst IN VOLGORDE VAN AI-RELEVENTIE (st.session_state.geselecteerde_doc_ids)
+    # Tegels in volgorde van AI-relevantie
     tegel_items = []
     volgorde_ids = st.session_state.geselecteerde_doc_ids if st.session_state.geselecteerde_doc_ids else list(dossiers_dict.keys())
 
@@ -586,7 +588,7 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
 # ------------------------------------------------------------------------------
 # 6. HISTORISCH RAPPORT & CHAT
 # ------------------------------------------------------------------------------
-if not st.session_state.start_zoekopdracht and st.session_state.chat_historie:
+if st.session_state.chat_historie:
     st.divider()
     st.subheader("📑 Historisch Onderzoeksrapport")
     

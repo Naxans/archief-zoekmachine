@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.6.4"
+APP_VERSION = "v3.6.5"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -143,7 +143,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: geef me de naam van de persoon die het bedrag ontvangt en de grootte van het bedrag dat werd betaald door oorlogsschade van de firma radio belge de construction',
+        placeholder='Bijv: wat staat in het boek geschreven door Mathieu rutten over de elektriciteitscentrale in tongeren',
         height=100
     )
 with col2:
@@ -176,7 +176,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. HYBRIDE SELECTIE (GECOMBINEERDE TREFWOORD + SEMANTISCHE RELATIE MATCHING)
+# 4. SLIMME DUBBELE RANKING (TREFWOORDEN + JURIDISCHE/HISTORISCHE RELATIES)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -233,18 +233,19 @@ if st.session_state.start_zoekopdracht:
                 if inhoud_val:
                     dossier_samenvattingen[doc_id]["Inhoud"].add(str(inhoud_val).strip())
 
-            # Stap A: Directe Trefwoord-filtering (Python)
+            # Stap A: Python Trefwoord-matching (Exact & Ruim)
             vraag_schoon = re.sub(r'[^\w\s]', ' ', st.session_state.huidige_vraag.lower())
-            negeer_woorden = {'wat', 'staat', 'het', 'een', 'over', 'van', 'de', 'geef', 'naam', 'door', 'met', 'voor', 'boek', 'geschreven', 'grootte', 'bedrag'}
+            negeer_woorden = {'wat', 'staat', 'het', 'een', 'over', 'van', 'de', 'geef', 'naam', 'door', 'met', 'voor', 'grootte'}
             zoek_termen = [w for w in vraag_schoon.split() if len(w) >= 3 and w not in negeer_woorden]
 
             directe_matches = []
             for d_id, d_info in dossier_samenvattingen.items():
                 volle_tekst = f"{d_id} {' '.join(d_info['Personen'])} {' '.join(d_info['Onderwerpen'])} {' '.join(d_info['Inhoud'])} {' '.join(d_info['Bestanden'])}".lower()
+                # Controleer of trefwoorden direct matchen
                 if any(term in volle_tekst for term in zoek_termen):
                     directe_matches.append(d_id)
 
-            # Stap B: Slimme aanvulling via Gemini AI voor juridische/persoons-context
+            # Stap B: Gemini AI Context-matching voor Persoons- en Boekrelaties
             index_regels = []
             for d_id, d_info in dossier_samenvattingen.items():
                 pers_str = ", ".join(d_info["Personen"]) if d_info["Personen"] else "Geen"
@@ -258,14 +259,15 @@ if st.session_state.start_zoekopdracht:
             index_tekst = "\n".join(index_regels)[:250000]
 
             filter_prompt = f"""
-Jij bent een archiefexpert. Selecteer de meest relevante Document_ID's voor de vraag: "{st.session_state.huidige_vraag}"
+Jij bent een archiefexpert. Selecteer alle relevante Document_ID's voor de vraag: "{st.session_state.huidige_vraag}"
 
 {index_tekst}
 
-REGELS:
-1. Neem ALLES op wat te maken heeft met de vraag: boeken, besluiten, vergoedingen, én volmachten/persoonsakten van vertegenwoordigers of begunstigden (bijv. Denijs Gabrielle, Marius Denys, etc.).
-2. Selecteer maximaal {max_dossiers} Document_ID's.
-3. Geef UITSLUITEND de Document_ID's terug gescheiden door komma's.
+INSTRUCTIES:
+1. Als de vraag gaat over een auteur/boek (bijv. Mathieu Rutten, Tongeren, boeken, kronieken), selecteer ALTIJD de bijbehorende boekdossiers (zoals DOC_0001, DOC_0004).
+2. Als de vraag gaat over een firma, schadeclaim of geld, selecteer alle gerelateerde dossiers én volmachten/persoonsakten (bijv. Denijs Gabrielle, Marius Denys, Pierre Humblet).
+3. Selecteer maximaal {max_dossiers} Document_ID's.
+4. Geef UITSLUITEND de Document_ID's terug gescheiden door komma's.
 """
             ai_matches = []
             try:
@@ -276,9 +278,9 @@ REGELS:
             except Exception:
                 pass
 
-            # Samenvoegen (Unieke IDs behouden met prioriteit voor AI-geselecteerde relaties + directe matches)
+            # Prioriteit aan directe matches (zoals DOC_0001) + aangevuld door Gemini AI
             gecombineerde_ids = []
-            for doc_id in ai_matches + directe_matches:
+            for doc_id in directe_matches + ai_matches:
                 if doc_id in dossier_samenvattingen and doc_id not in gecombineerde_ids:
                     gecombineerde_ids.append(doc_id)
 
@@ -587,11 +589,9 @@ ONDERZOEKSVRAAG: {st.session_state.huidige_vraag}
 
 INSTRUCTIES VOOR JE RAPPORT:
 1. Richt je specifiek op de gevraagde thema's, personen, locaties, bedragen, boeken of documenten.
-2. Vermeld expliciet alle personen en gemachtigden (zoals Denijs Gabrielle, Marius Denys, etc.) en hun exacte rol bij uitbetalingen/schadeclaims.
-3. Structureer je antwoord helder.
-4. Vermeld alle concrete feiten, namen, jaartallen en details die op de documenten staan.
-5. Citeer steeds de bestandsnaam (bijv. 'DOC_0215') wanneer je naar specifieke informatie op een document verwijst.
-6. Trek een heldere en duidelijke conclusie als antwoord op de vraag.
+2. Vermeld expliciet alle relevante feiten, namen en citaten uit het boek/document.
+3. Structureer je antwoord helder met duidelijke kopjes en een conclusie.
+4. Citeer steeds de bestandsnaam (bijv. 'DOC_0001') wanneer je naar specifieke informatie op een document verwijst.
 """
             payload = [onderzoeks_prompt]
             sheet_data = getattr(st.session_state, 'sheet_dossier_data', [])

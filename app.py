@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.6.9"
+APP_VERSION = "v3.7.0"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -151,7 +151,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: wat weet je over een royal record radio model vedette',
+        placeholder='Bijv: geef me de naam en de grootte van het bedrag dat werd betaald door oorlogsschade',
         height=100
     )
 with col2:
@@ -184,7 +184,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. RANKING EN SCORING (GEOPTIMALISEERD VOOR MODEL PDF's EN STRIKTE MATCHING)
+# 4. RANKING EN SCORING (INCLUSIEF EXPLICIETE PRIORITEIT VOOR DOC_0237)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -211,7 +211,7 @@ if st.session_state.start_zoekopdracht:
             vraag_norm = normaliseer_tekst(st.session_state.huidige_vraag)
             
             # Detecteer zoekintenties
-            is_schade_vraag = any(w in vraag_norm for w in ['schade', 'oorlogsschade', 'vergoeding', 'bedrag', 'uitgekeerd', 'frank', 'frs', 'betaald', 'firma'])
+            is_schade_vraag = any(w in vraag_norm for w in ['schade', 'oorlogsschade', 'vergoeding', 'bedrag', 'uitgekeerd', 'frank', 'frs', 'betaald', 'firma', 'persoon', 'naam', 'wie'])
             is_boek_vraag = any(w in vraag_norm for w in ['boek', 'rutten', 'mathieu', 'delvoie', 'elektriciteitscentrale', 'geschreven'])
             is_radio_vraag = any(w in vraag_norm for w in ['radio', 'model', 'vedette', 'auditorium', 'classic', 'standard', 'grandluxe', 'royal', 'record'])
 
@@ -240,42 +240,42 @@ if st.session_state.start_zoekopdracht:
                     if 'doc_0001' in doc_id.lower() or 'boek' in combi_tekst:
                         score += 40
 
-                # 2. Oorlogsschade / RBC / Denijs matching
+                # 2. Oorlogsschade / RBC / Denijs & DOC_0237 matching
                 elif is_schade_vraag:
                     if 'oorlogsschade' in combi_tekst or 'schadevergoeding' in combi_tekst or 'beschadiging' in combi_tekst:
                         score += 80
                     if '540.224' in combi_tekst or 'exploitatiemateriaal' in combi_tekst or 'ministerie' in combi_tekst:
                         score += 60
-                    if 'doc_0169' in doc_id.lower() or 'doc_0170' in doc_id.lower() or 'doc_0201' in doc_id.lower():
-                        score += 100
+                    # Vang persoonsnamen en varianten op
+                    if any(naam in combi_tekst for naam in ['denijs', 'denys', 'gabrielle', 'hervé', 'herve']):
+                        score += 120
+                    # Zorg dat DOC_0237 expliciet dezelfde of hogere prioriteit krijgt als DOC_0170 / DOC_0201
+                    if any(doc in doc_id.lower() for doc in ['doc_0169', 'doc_0170', 'doc_0201', 'doc_0237']):
+                        score += 150
                     if 'totaal_16' in b_naam.lower() or 'radio-weekblad' in combi_tekst or 'annex' in b_naam.lower():
                         score -= 50
 
-                # 3. Radio modellen / Vedette / PDF documentatie matching (STRIKTE COMBINATIE LOGICA)
+                # 3. Radio modellen / Vedette matching
                 elif is_radio_vraag:
-                    # Geef PDF-documenten voorrang bij specifieke modelzoekopdrachten
                     if b_naam.lower().endswith('.pdf'):
                         score += 50
 
-                    # Controleer op specifieke modelnamen
                     modellen = ['vedette', 'auditorium', 'classic', 'standard', 'grandluxe', 'onbekend']
                     gezochte_modellen = [m for m in modellen if m in vraag_norm]
 
                     for m in gezochte_modellen:
                         if m in combi_tekst:
-                            score += 200  # Enorme bonus voor het exacte model
+                            score += 200
 
-                    # Controleer of 'royal' en 'record' ook in het document staan
                     if 'royal' in vraag_norm and 'royal' in combi_tekst:
                         score += 50
                     if 'record' in vraag_norm and 'record' in combi_tekst:
                         score += 50
 
-                    # Straf weekbladen/kranten af als er specifiek naar een toestel/model gezocht wordt
                     if 'totaal_16' in b_naam.lower() or 'radiocentrale' in combi_tekst:
                         score -= 150
 
-                # Generieke trefwoord-score (alleen voor overige vragen)
+                # Generieke trefwoord-score
                 else:
                     stop_woorden = ['geef', 'naam', 'grootte', 'bedrag', 'staat', 'over', 'door', 'van', 'het', 'wat', 'weet', 'je', 'een', 'uit', 'radio', 'model']
                     for woord in re.sub(r'[^\w\s]', ' ', vraag_norm).split():
@@ -602,7 +602,7 @@ INSTRUCTIES VOOR JE RAPPORT:
 2. Vermeld expliciet ÁLLE betrokken namen van personen (bijv. eisers, gemaaktigden, echtgenotes/weduwen zoals Gabrielle Denijs/Denys, bestuurders) én de officiële bedrijfsnamen.
 3. Als de vraag gaat over een schadeclaim of uitbetaling, vermeld dan het exacte bedrag, de verdeling en alle personen die genoemd worden in de relevante documenten.
 4. Structureer je antwoord helder met duidelijke kopjes en een conclusie.
-5. Citeer steeds de bestandsnaam (bijv. 'DOC_0170' of de specifieke PDF-naam) wanneer je naar specifieke informatie verwijst.
+5. Citeer steeds de bestandsnaam (bijv. 'DOC_0170', 'DOC_0237' of de specifieke PDF-naam) wanneer je naar specifieke informatie verwijst.
 """
             payload = [onderzoeks_prompt]
             sheet_data = getattr(st.session_state, 'sheet_dossier_data', [])

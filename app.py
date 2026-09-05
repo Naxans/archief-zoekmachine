@@ -6,6 +6,7 @@ import warnings
 import json
 import re
 import gc
+import math
 import streamlit as st
 import streamlit.components.v1 as components
 from PIL import Image
@@ -18,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.5.0"
+APP_VERSION = "v3.5.1"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -135,7 +136,7 @@ with col_ver:
 if MODEL_NAAM:
     st.caption(f"Actief AI-model: `{MODEL_NAAM}`")
 else:
-    st.error("Kon geen werkend Gemini-model primitive vinden.")
+    st.error("Kon geen werkend Gemini-model vinden.")
     st.stop()
 
 col1, col2 = st.columns([3, 1])
@@ -299,7 +300,7 @@ if st.session_state.start_zoekopdracht:
         st.rerun()
 
 # ------------------------------------------------------------------------------
-# 5. DIRECTE WEERGAVE VAN DE FOTOTEGELS (BINNEN 2 SEC)
+# 5. DIRECTE WEERGAVE VAN DE FOTOTEGELS (STRAK GEMETEN HOOGTE)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas:
     st.divider()
@@ -343,7 +344,7 @@ if st.session_state.blader_paginas:
         <style>
             body {{
                 margin: 0;
-                padding: 10px 0;
+                padding: 5px 0;
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                 background: transparent;
             }}
@@ -532,9 +533,12 @@ if st.session_state.blader_paginas:
     </html>
     """
 
+    # Nauwkeurige hoogtemeting zonder overbodige witruimte
     aantal_tegels = len(tegel_items)
-    berekende_hoogte = max(260, ((aantal_tegels // 5) + 1) * 250)
-    components.html(grid_html, height=berekende_hoogte, scrolling=True)
+    aantal_rijen = math.ceil(aantal_tegels / 5) if aantal_tegels > 0 else 1
+    berekende_hoogte = (aantal_rijen * 240) + 15
+
+    components.html(grid_html, height=berekende_hoogte, scrolling=False)
 
 # ------------------------------------------------------------------------------
 # 6. HISTORISCH RAPPORT & CHAT (OP DE ACHTERGROND NÁ DE TEGELS)

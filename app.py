@@ -17,7 +17,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.8.0"
+APP_VERSION = "v2.9.0"
 APP_DATE = "2026"
 
 # SDK meldingen onderdrukken voor schone logs
@@ -130,9 +130,8 @@ with st.sidebar:
 
     with st.expander("💡 Tips voor het testen"):
         st.markdown("""
-        * **Google Drive Viewer:** Klik op **"🔎 Open document in viewer"** om de pagina's in volledig scherm te bekijken.
-        * **Muiswiel & Slepen:** Scroll om in/uit te zoomen, sleep om door de pagina te bewegen.
-        * **Sneltoetsen:** Gebruik **`←`** en **`→`** op je toetsenbord om te bladeren, of **`ESC`** om de viewer te sluiten.
+        * **Fullscreen Overlay:** Klik op **"🔎 Open document in viewer"** om de afbeeldingen op volledig scherm te bekijken.
+        * **Sneltoetsen:** Gebruik **`←`** en **`→`** op je toetsenbord om te bladeren, of **`ESC`** om te sluiten.
         """)
 
 # Titel op de hoofdpagina
@@ -376,7 +375,7 @@ if st.session_state.start_zoekopdracht:
         st.session_state.start_zoekopdracht = False
 
 # ------------------------------------------------------------------------------
-# 5. ECHTE FULLSCREEN OVERLAY VIEWER (GOOGLE DRIVE STYLE VIA TOP DOM)
+# 5. DIRECTE AFBEELDING OVERLAY VIEWER (FULLSCREEN GEMINI/DRIVE STYLE)
 # ------------------------------------------------------------------------------
 if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
     
@@ -430,14 +429,11 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
                 let currentIndex = 0;
 
                 function openDriveOverlay() {{
-                    // Bepaal de hoofd-document body (buiten het streamlit iframe)
                     const topDoc = window.top.document;
                     
-                    // Verwijder eventuele oude modal
                     const bestaandeModal = topDoc.getElementById('rbc-drive-modal');
                     if (bestaandeModal) bestaandeModal.remove();
 
-                    // Maak de overlay container op de top-page
                     const modal = topDoc.createElement('div');
                     modal.id = 'rbc-drive-modal';
                     modal.style.cssText = `
@@ -446,22 +442,21 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
                         left: 0;
                         width: 100vw;
                         height: 100vh;
-                        background-color: rgba(0, 0, 0, 0.85);
-                        backdrop-filter: blur(5px);
+                        background-color: rgba(0, 0, 0, 0.92);
+                        backdrop-filter: blur(6px);
                         z-index: 9999999;
                         display: flex;
                         flex-direction: column;
                         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                     `;
 
-                    // Bovenbalk (Google Drive stijl)
                     modal.innerHTML = `
                         <div id="rbc-top-bar" style="height: 56px; background: rgba(20,20,20,0.95); display: flex; align-items: center; padding: 0 20px; color: white; border-bottom: 1px solid rgba(255,255,255,0.1);">
                             <button id="rbc-close-btn" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-right: 15px;" title="Sluiten (ESC)">✕</button>
                             <div id="rbc-title-info" style="font-size: 15px; color: #e8eaed; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Laden...</div>
                         </div>
-                        <div style="position: relative; flex: 1; width: 100%; height: calc(100vh - 56px);">
-                            <iframe id="rbc-iframe" style="width: 100%; height: 100%; border: none;" src=""></iframe>
+                        <div style="position: relative; flex: 1; width: 100%; height: calc(100vh - 56px); display: flex; align-items: center; justify-content: center; overflow: hidden;">
+                            <img id="rbc-img" style="max-width: 90%; max-height: 90%; object-fit: contain; border-radius: 4px; box-shadow: 0 0 25px rgba(0,0,0,0.8); transition: opacity 0.2s;" src="" />
                             <div id="rbc-prev-btn" style="position: absolute; top: 50%; left: 20px; transform: translateY(-50%); width: 48px; height: 48px; background: rgba(30,30,30,0.8); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; font-size: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; z-index: 10;" title="Vorige pagina">&#8249;</div>
                             <div id="rbc-next-btn" style="position: absolute; top: 50%; right: 20px; transform: translateY(-50%); width: 48px; height: 48px; background: rgba(30,30,30,0.8); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; font-size: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; z-index: 10;" title="Volgende pagina">&#8250;</div>
                         </div>
@@ -470,7 +465,7 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
                     topDoc.body.appendChild(modal);
                     topDoc.body.style.overflow = 'hidden';
 
-                    const iframe = topDoc.getElementById('rbc-iframe');
+                    const imgEl = topDoc.getElementById('rbc-img');
                     const titleInfo = topDoc.getElementById('rbc-title-info');
                     const closeBtn = topDoc.getElementById('rbc-close-btn');
                     const prevBtn = topDoc.getElementById('rbc-prev-btn');
@@ -479,7 +474,11 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
                     function updateViewer() {{
                         if (paginas.length === 0) return;
                         const item = paginas[currentIndex];
-                        iframe.src = `https://drive.google.com/file/d/${{item.id}}/preview`;
+                        
+                        imgEl.style.opacity = '0.3';
+                        imgEl.src = `https://lh3.googleusercontent.com/d/${{item.id}}`;
+                        imgEl.onload = () => {{ imgEl.style.opacity = '1'; }};
+
                         titleInfo.innerText = `${{item.naam}}  •  Pagina ${{currentIndex + 1}} van ${{paginas.length}}`;
 
                         prevBtn.style.opacity = (currentIndex === 0) ? '0.2' : '1';

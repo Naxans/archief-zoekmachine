@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.7.0"
+APP_VERSION = "v3.7.1"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -184,7 +184,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. RANKING EN SCORING (INCLUSIEF EXPLICIETE PRIORITEIT VOOR DOC_0237)
+# 4. RANKING EN SCORING
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -207,10 +207,8 @@ if st.session_state.start_zoekopdracht:
                 st.session_state.start_zoekopdracht = False
                 st.stop()
 
-            # Normaliseer de onderzoeksvraag (lowercase + ij -> y)
             vraag_norm = normaliseer_tekst(st.session_state.huidige_vraag)
             
-            # Detecteer zoekintenties
             is_schade_vraag = any(w in vraag_norm for w in ['schade', 'oorlogsschade', 'vergoeding', 'bedrag', 'uitgekeerd', 'frank', 'frs', 'betaald', 'firma', 'persoon', 'naam', 'wie'])
             is_boek_vraag = any(w in vraag_norm for w in ['boek', 'rutten', 'mathieu', 'delvoie', 'elektriciteitscentrale', 'geschreven'])
             is_radio_vraag = any(w in vraag_norm for w in ['radio', 'model', 'vedette', 'auditorium', 'classic', 'standard', 'grandluxe', 'royal', 'record'])
@@ -231,7 +229,6 @@ if st.session_state.start_zoekopdracht:
 
                 score = 0
 
-                # 1. Boek / Mathieu Rutten / Delvoie matching
                 if is_boek_vraag:
                     if 'rutten' in combi_tekst or 'mathieu' in combi_tekst or 'delvoie' in combi_tekst:
                         score += 100
@@ -240,22 +237,18 @@ if st.session_state.start_zoekopdracht:
                     if 'doc_0001' in doc_id.lower() or 'boek' in combi_tekst:
                         score += 40
 
-                # 2. Oorlogsschade / RBC / Denijs & DOC_0237 matching
                 elif is_schade_vraag:
                     if 'oorlogsschade' in combi_tekst or 'schadevergoeding' in combi_tekst or 'beschadiging' in combi_tekst:
                         score += 80
                     if '540.224' in combi_tekst or 'exploitatiemateriaal' in combi_tekst or 'ministerie' in combi_tekst:
                         score += 60
-                    # Vang persoonsnamen en varianten op
-                    if any(naam in combi_tekst for naam in ['denijs', 'denys', 'gabrielle', 'hervé', 'herve']):
+                    if any(naam in combi_tekst for naam in ['denijs', 'denys', 'benijs', 'gabrielle', 'hervé', 'herve']):
                         score += 120
-                    # Zorg dat DOC_0237 expliciet dezelfde of hogere prioriteit krijgt als DOC_0170 / DOC_0201
                     if any(doc in doc_id.lower() for doc in ['doc_0169', 'doc_0170', 'doc_0201', 'doc_0237']):
                         score += 150
                     if 'totaal_16' in b_naam.lower() or 'radio-weekblad' in combi_tekst or 'annex' in b_naam.lower():
                         score -= 50
 
-                # 3. Radio modellen / Vedette matching
                 elif is_radio_vraag:
                     if b_naam.lower().endswith('.pdf'):
                         score += 50
@@ -275,7 +268,6 @@ if st.session_state.start_zoekopdracht:
                     if 'totaal_16' in b_naam.lower() or 'radiocentrale' in combi_tekst:
                         score -= 150
 
-                # Generieke trefwoord-score
                 else:
                     stop_woorden = ['geef', 'naam', 'grootte', 'bedrag', 'staat', 'over', 'door', 'van', 'het', 'wat', 'weet', 'je', 'een', 'uit', 'radio', 'model']
                     for woord in re.sub(r'[^\w\s]', ' ', vraag_norm).split():
@@ -566,7 +558,7 @@ if st.session_state.blader_paginas:
 
                 closeBtn.onclick = sluitModal;
                 prevBtn.onclick = () => {{ if (currentIndex > 0) {{ currentIndex--; updateViewer(); }} }};
-                nextBtn.onclick = () => {{ if (currentIndex < dossierPaginas.length - 1) {{ currentIndex++; updateViewer(); }} }};
+                nextBtn.onclick = () => {{ if (currentIndex < dossierPaginas.length - 1) {{ currentIndex--; updateViewer(); }} }};
 
                 topDoc.addEventListener('keydown', keyHandler);
 
@@ -586,7 +578,7 @@ if st.session_state.blader_paginas:
     components.html(grid_html, height=berekende_hoogte, scrolling=False)
 
 # ------------------------------------------------------------------------------
-# 6. GECOMBINEERDE VISUELE & METADATA ANALYSE VIA GEMINI
+# 6. GECOMBINEERDE VISUELE & METADATA ANALYSE VIA GEMINI (MET EXTRA HARDENING)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas and not st.session_state.chat_historie:
     with st.spinner("Stap 3/3: Historische en visuele analyse uitvoeren via Gemini..."):
@@ -608,7 +600,7 @@ INSTRUCTIES VOOR JE RAPPORT:
             sheet_data = getattr(st.session_state, 'sheet_dossier_data', [])
 
             # 1. Voeg Sheet metadata toe
-            tekst_gebundeld = f"\n--- REGISTORGEGEVENS VAN SELECTIE ({len(sheet_data)} RECORD(S)) ---\n"
+            tekst_gebundeld = f"\n--- REGISTERGEGEVENS VAN SELECTIE ({len(sheet_data)} RECORD(S)) ---\n"
             for idx, r in enumerate(sheet_data, start=1):
                 doc_id = r.get('Document_ID', '')
                 b_naam = r.get('Bestandsnaam', '')
@@ -623,9 +615,13 @@ INSTRUCTIES VOOR JE RAPPORT:
 
             payload.append(tekst_gebundeld)
 
-            # 2. Voeg de daadwerkelijke visuele afbeeldingen/PDF's toe aan de AI payload
-            max_fotos = 25
-            for item in st.session_state.blader_paginas[:max_fotos]:
+            # 2. Voeg de afbeelden gecontroleerd toe (maximaal 15 afbeeldingen, sterker verkleind)
+            max_fotos = 15
+            geüploade_fotos = 0
+
+            for item in st.session_state.blader_paginas:
+                if geüploade_fotos >= max_fotos:
+                    break
                 try:
                     req = drive_service.files().get_media(fileId=item['id'])
                     f_data = req.execute()
@@ -634,22 +630,26 @@ INSTRUCTIES VOOR JE RAPPORT:
                         pdf_part = types.Part.from_bytes(data=f_data, mime_type='application/pdf')
                         payload.append(f"\n--- ORIGINELE PDF: {item['naam']} ---")
                         payload.append(pdf_part)
+                        geüploade_fotos += 1
                     else:
                         img = Image.open(io.BytesIO(f_data))
                         if img.mode != 'RGB':
                             img = img.convert('RGB')
                         
-                        img.thumbnail((800, 800))
+                        # Schaal sterker af naar 600px om te voorkomen dat het geheugen/payload limiet overschreden wordt
+                        img.thumbnail((600, 600))
                         img_byte_arr = io.BytesIO()
-                        img.save(img_byte_arr, format='JPEG', quality=70)
+                        img.save(img_byte_arr, format='JPEG', quality=65)
 
                         img_part = types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/jpeg')
                         payload.append(f"\n--- ORIGINELE AFBEELDING: {item['naam']} ---")
                         payload.append(img_part)
+                        geüploade_fotos += 1
                         
                         del img; del f_data; del img_byte_arr
-                except Exception:
-                    pass
+                except Exception as img_err:
+                    # Sla problematische afbeeldingen stilletjes over i.p.v. dat de app crasht
+                    continue
 
             st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
             analyse_response = genereer_met_retry(ai_client, MODEL_NAAM, payload)
@@ -657,7 +657,7 @@ INSTRUCTIES VOOR JE RAPPORT:
             gc.collect()
             st.rerun()
         except Exception as e:
-            st.error(f"Fout tijdens de analyse: {e}")
+            st.error(f"Er is een fout opgetreden bij de verwerking door Gemini: {e}")
 
 if st.session_state.chat_historie:
     st.divider()

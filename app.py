@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.6.8"
+APP_VERSION = "v3.6.9"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -34,7 +34,6 @@ def normaliseer_tekst(tekst):
     if not tekst:
         return ""
     tekst = str(tekst).lower()
-    # Vervang 'ij' door 'y' zodat Denijs en Denys exact hetzelfde matchen
     tekst = tekst.replace('ij', 'y')
     return tekst
 
@@ -152,7 +151,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: geef me de naam en de grootte van het bedrag dat werd betaald door oorlogsschade van de firma radio belge de construction',
+        placeholder='Bijv: wat weet je over een royal record radio model vedette',
         height=100
     )
 with col2:
@@ -185,7 +184,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. RANKING EN SCORING (INCLUSIEF FOTO, PDF & NORMALISATIE LOGICA)
+# 4. RANKING EN SCORING (GEOPTIMALISEERD VOOR MODEL PDF's EN STRIKTE MATCHING)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -214,7 +213,7 @@ if st.session_state.start_zoekopdracht:
             # Detecteer zoekintenties
             is_schade_vraag = any(w in vraag_norm for w in ['schade', 'oorlogsschade', 'vergoeding', 'bedrag', 'uitgekeerd', 'frank', 'frs', 'betaald', 'firma'])
             is_boek_vraag = any(w in vraag_norm for w in ['boek', 'rutten', 'mathieu', 'delvoie', 'elektriciteitscentrale', 'geschreven'])
-            is_radio_vraag = any(w in vraag_norm for w in ['radio', 'model', 'vedette', 'auditorium', 'classic', 'standard', 'grandluxe', 'royal'])
+            is_radio_vraag = any(w in vraag_norm for w in ['radio', 'model', 'vedette', 'auditorium', 'classic', 'standard', 'grandluxe', 'royal', 'record'])
 
             dossier_scores = {}
 
@@ -242,7 +241,7 @@ if st.session_state.start_zoekopdracht:
                         score += 40
 
                 # 2. Oorlogsschade / RBC / Denijs matching
-                if is_schade_vraag:
+                elif is_schade_vraag:
                     if 'oorlogsschade' in combi_tekst or 'schadevergoeding' in combi_tekst or 'beschadiging' in combi_tekst:
                         score += 80
                     if '540.224' in combi_tekst or 'exploitatiemateriaal' in combi_tekst or 'ministerie' in combi_tekst:
@@ -250,20 +249,39 @@ if st.session_state.start_zoekopdracht:
                     if 'doc_0169' in doc_id.lower() or 'doc_0170' in doc_id.lower() or 'doc_0201' in doc_id.lower():
                         score += 100
                     if 'totaal_16' in b_naam.lower() or 'radio-weekblad' in combi_tekst or 'annex' in b_naam.lower():
-                        score -= 30
+                        score -= 50
 
-                # 3. Radio modellen / Vedette / PDF documentatie matching
-                if is_radio_vraag:
-                    for model_kw in ['vedette', 'auditorium', 'classic', 'standard', 'grandluxe']:
-                        if model_kw in vraag_norm and model_kw in combi_tekst:
-                            score += 100
+                # 3. Radio modellen / Vedette / PDF documentatie matching (STRIKTE COMBINATIE LOGICA)
+                elif is_radio_vraag:
+                    # Geef PDF-documenten voorrang bij specifieke modelzoekopdrachten
+                    if b_naam.lower().endswith('.pdf'):
+                        score += 50
 
-                # Generieke trefwoord-score
-                stop_woorden = ['geef', 'naam', 'grootte', 'bedrag', 'staat', 'over', 'door', 'van', 'het', 'wat', 'weet', 'je', 'een', 'uit']
-                for woord in re.sub(r'[^\w\s]', ' ', vraag_norm).split():
-                    if len(woord) >= 3 and woord not in stop_woorden:
-                        if woord in combi_tekst:
-                            score += 30
+                    # Controleer op specifieke modelnamen
+                    modellen = ['vedette', 'auditorium', 'classic', 'standard', 'grandluxe', 'onbekend']
+                    gezochte_modellen = [m for m in modellen if m in vraag_norm]
+
+                    for m in gezochte_modellen:
+                        if m in combi_tekst:
+                            score += 200  # Enorme bonus voor het exacte model
+
+                    # Controleer of 'royal' en 'record' ook in het document staan
+                    if 'royal' in vraag_norm and 'royal' in combi_tekst:
+                        score += 50
+                    if 'record' in vraag_norm and 'record' in combi_tekst:
+                        score += 50
+
+                    # Straf weekbladen/kranten af als er specifiek naar een toestel/model gezocht wordt
+                    if 'totaal_16' in b_naam.lower() or 'radiocentrale' in combi_tekst:
+                        score -= 150
+
+                # Generieke trefwoord-score (alleen voor overige vragen)
+                else:
+                    stop_woorden = ['geef', 'naam', 'grootte', 'bedrag', 'staat', 'over', 'door', 'van', 'het', 'wat', 'weet', 'je', 'een', 'uit', 'radio', 'model']
+                    for woord in re.sub(r'[^\w\s]', ' ', vraag_norm).split():
+                        if len(woord) >= 3 and woord not in stop_woorden:
+                            if woord in combi_tekst:
+                                score += 30
 
                 if score > 0:
                     dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + score
@@ -581,7 +599,7 @@ ONDERZOEKSVRAAG: {st.session_state.huidige_vraag}
 
 INSTRUCTIES VOOR JE RAPPORT:
 1. Richt je specifiek op de gevraagde thema's, personen, locaties, bedragen, boeken, radiomodellen of documenten.
-2. Vermeld expliciet ÁLLE betrokken namen van personen (bijv. eisers, gemachtigden, echtgenotes/weduwen zoals Gabrielle Denijs/Denys, bestuurders) én de officiële bedrijfsnamen.
+2. Vermeld expliciet ÁLLE betrokken namen van personen (bijv. eisers, gemaaktigden, echtgenotes/weduwen zoals Gabrielle Denijs/Denys, bestuurders) én de officiële bedrijfsnamen.
 3. Als de vraag gaat over een schadeclaim of uitbetaling, vermeld dan het exacte bedrag, de verdeling en alle personen die genoemd worden in de relevante documenten.
 4. Structureer je antwoord helder met duidelijke kopjes en een conclusie.
 5. Citeer steeds de bestandsnaam (bijv. 'DOC_0170' of de specifieke PDF-naam) wanneer je naar specifieke informatie verwijst.

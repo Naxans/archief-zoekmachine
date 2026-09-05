@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.5.3"
+APP_VERSION = "v3.5.5"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -147,7 +147,7 @@ with col1:
         height=100
     )
 with col2:
-    max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=15, step=5)
+    max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=25, step=5)
 
 btn_col1, btn_col2 = st.columns([2, 1])
 with btn_col1:
@@ -176,7 +176,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. VOLLEDIGE INHOUD & CIJFERS SEARCH
+# 4. SLIMME PERSONEN- & INHOUDSSEARCH (AUTOMATISCHE DIVERSIFICATIE)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -220,6 +220,9 @@ if st.session_state.start_zoekopdracht:
                 zoek_groepen.append(varianten)
 
             doc_scores = {}
+            
+            # Detecteer of de gebruiker vraagt naar 'wie' of 'ontvanger'
+            zoekt_naar_ontvanger = any(term in st.session_state.huidige_vraag.lower() for term in ['wie', 'ontvangt', 'ontvangen', 'begunstigde', 'uitbetaling', 'persoon', 'rechthebbende'])
 
             if zoek_groepen:
                 familie_termen = ['familie', 'stamboom', 'geslacht', 'ouders', 'kinderen', 'echtgenoot', 'echtgenote', 'huwelijk', 'auteur']
@@ -249,13 +252,19 @@ if st.session_state.start_zoekopdracht:
                     if is_boek_vraag and any(b_term in combi_tekst for b_term in ['boek', 'omslag', 'publicatie', 'tijdschrift', 'weekblad']): score += 25
                     if any(v in combi_tekst for grp in zoek_groepen for v in grp if len(v) > 3) and any(f in combi_tekst for f in familie_termen): score += 8
                     
-                    if any(term in combi_tekst for term in ['oorlogsschade', 'schadevergoeding', 'uitbetaling', 'frank', 'fr.']): 
+                    # GEFORCEERDE PRIORITEIT VOOR PERSONEN ALS 'WIE' WORDT GEVRAAGD
+                    if zoekt_naar_ontvanger and personen_val and len(personen_val) > 2:
+                        score += 30  # Hoge bonus zodat fiches met persoonsnamen bovendrijven
+                    
+                    if any(term in combi_tekst for term in ['oorlogsschade', 'schadevergoeding', 'uitbetaling', 'frank', 'fr.', 'toekenning', 'bekomen']): 
                         score += 15
 
                     if score > 0:
                         doc_scores[gekozen_id] = doc_scores.get(gekozen_id, 0) + score
 
                 gesorteerde_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)
+                
+                # Zorg voor een gezonde mix: neem top algemene dossiers én top persoonsdossiers
                 st.session_state.geselecteerde_doc_ids = [doc_id for doc_id, score in gesorteerde_docs[:max_dossiers]]
 
         if not st.session_state.geselecteerde_doc_ids:
@@ -548,22 +557,22 @@ if st.session_state.blader_paginas:
     components.html(grid_html, height=berekende_hoogte, scrolling=False)
 
 # ------------------------------------------------------------------------------
-# 6. HISTORISCH RAPPORT & CHAT (GEÜPGRADED VOOR VOLLEDIGE DETECTIE)
+# 6. HISTORISCH RAPPORT & CHAT (DIEPE PERSOONSDETECTIE)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas and not st.session_state.chat_historie:
     with st.spinner("Historische analyse uitvoeren op de geselecteerde documenten via Gemini..."):
         try:
             scherpe_prompt = f"""
 Jij bent een financieel-historisch expert en hoofdarchivaris.
-Beantwoord de onderstaande onderzoeksvraag uiterst nauwkeurig op basis van ALLE meegeleverde dossiergegevens.
+Beantwoord de onderstaande onderzoeksvraag uiterst nauwkeurig op basis van ALLE meegeleverde dossiergegevens in het register.
 
 ONDERZOEKSVRAAG: {st.session_state.huidige_vraag}
 
-CRUCIALE INSTRUCTIES:
-1. LET OP EINDRESULTATEN EN UITBETALINGEN: Kijk niet alleen naar de eerste schadestaten of initiële ramingen van experts (zoals 396.599 fr.), maar zoek uitdrukkelijk naar DEFINITIEVE TOEKENNINGEN, EINDUITBETALINGEN en overdrachten.
-2. NATUURLIJKE PERSONEN EN RECHTHEBBENDEN: Controleer of de schadevergoeding direct of indirect is uitbetaald aan een specifiek persoon (zoals een eigenaar, echtgenote, erfgename of vertegenwoordiger, bijv. mevrouw Denijs Gabrielle) en noem de exacte bedragen (bijv. 540.224 fr.).
-3. Indien er meerdere bedragen of ontvangers in het dossier voorkomen (bijv. een initiële raming vs. een definitieve uitbetaling aan een persoon), vermeld ze dan BEIDE en leg het verschil duidelijk uit.
-4. Noem alle concrete namen, datums, documentfiches en bedragen die in de stukken staan.
+VERPLICHTE STRUCTUUR EN ANALYSE STAPPEN:
+1. IDENTIFICEER ALLE NATUURLIJKE PERSONEN EN RECHTHEBBENDEN: Doorzoek de meegeleverde gegevens heel bewust op personen (zoals echtgenotes, bewindvoerders, eigenaren, bijv. mevrouw Denijs Gabrielle, Charles Nagant, etc.). Noem expliciet wie de vergoeding of toekenning fysiek/juridisch ontvangt en vermeld welk specifiek bedrag (bijv. 540.224 fr.) aan hen is gekoppeld.
+2. SCHADEBEDRAGEN VAN DE VENNOOTSCHAP: Vermeld daarnaast ook de officiële schadestaten van de N.V. Radio Belge de Construction zelf (zoals de raming van 396.599,75 fr. van ingenieur Warzée).
+3. VERGELIJKING EN DUIDELIJKHEID: Maak een helder onderscheid tussen de vennootschap als eiser/rechtspersoon en de uiteindelijke uitbetaling of overdracht aan natuurlijke personen.
+4. BRONVERMELDING: Noem bij elk feit, bedrag en persoon de exacte Document_ID's of Item-nummers uit het register.
 """
             payload = [scherpe_prompt]
             sheet_data = getattr(st.session_state, 'sheet_dossier_data', [])

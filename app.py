@@ -17,7 +17,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.0.0"
+APP_VERSION = "v3.1.0"
 APP_DATE = "2026"
 
 # SDK meldingen onderdrukken voor schone logs
@@ -128,8 +128,9 @@ with st.sidebar:
 
     with st.expander("💡 Tips voor het testen"):
         st.markdown("""
-        * **Klikbare Tegels:** Klik op een fototegel om de afbeelding direct op volledig scherm te bekijken.
-        * **Sneltoetsen:** Gebruik **`←`** en **`→`** op je toetsenbord om door de pagina's te bladeren, of **`ESC`** om de viewer te sluiten.
+        * **Klikbare Tegels:** Klik op een fototegel van een document om het te openen.
+        * **Bladeren:** Gebruik **`←`** en **`→`** op je toetsenbord om door de pagina's van het geopende document te bladeren.
+        * **Sluiten:** Druk op **`ESC`** om de viewer te sluiten.
         """)
 
 # Titel op de hoofdpagina
@@ -372,16 +373,41 @@ if st.session_state.start_zoekopdracht:
         st.session_state.start_zoekopdracht = False
 
 # ------------------------------------------------------------------------------
-# 5. KLIKBARE FOTOTEGELS & FULLSCREEN VIEWER
+# 5. KLIKBARE FOTOTEGELS (ENKEL EERSTE PAGINA PER DOSSIER) & FULLSCREEN VIEWER
 # ------------------------------------------------------------------------------
 if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
     
     st.divider()
     st.subheader("🖼️ Geselecteerde Archiefdocumenten")
-    st.caption("Klik op een fototegel om het document op volledig scherm te openen in de viewer.")
+    st.caption("Klik op de eerste pagina van een document om de volledige inhoud te openen in de viewer.")
 
-    actieve_paginas = sorted(st.session_state.blader_paginas, key=natuurlijke_sortering)
-    paginas_json = json.dumps(actieve_paginas)
+    # Alle pagina's natuurlijk sorteren
+    alle_paginas = sorted(st.session_state.blader_paginas, key=natuurlijke_sortering)
+
+    # 1. Groepeer pagina's per Document_ID / Dossier
+    dossiers_dict = {}
+    for p in alle_paginas:
+        d_id = p.get("doc_id", "Dossier_Onbekend")
+        if d_id not in dossiers_dict:
+            dossiers_dict[d_id] = []
+        dossiers_dict[d_id].append(p)
+
+    # 2. Maak tegels-lijst met ENKEL de eerste pagina per dossier
+    tegel_items = []
+    for d_id, pagina_lijst in dossiers_dict.items():
+        eerste_pagina = pagina_lijst[0].copy()
+        
+        # Label opmaken voor onder de tegel
+        aantal_pags = len(pagina_lijst)
+        if aantal_pags > 1:
+            eerste_pagina["display_label"] = f"{d_id} ({aantal_pags} pag.)"
+        else:
+            eerste_pagina["display_label"] = d_id
+            
+        tegel_items.append(eerste_pagina)
+
+    tegels_json = json.dumps(tegel_items)
+    alle_dossiers_json = json.dumps(dossiers_dict)
 
     grid_html = f"""
     <!DOCTYPE html>
@@ -396,7 +422,7 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
             }}
             .grid-container {{
                 display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+                grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
                 gap: 15px;
                 width: 100%;
             }}
@@ -419,7 +445,7 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
             }}
             .img-container {{
                 width: 100%;
-                height: 160px;
+                height: 180px;
                 background-color: #f5f5f5;
                 display: flex;
                 align-items: center;
@@ -432,10 +458,10 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
                 object-fit: cover;
             }}
             .tile-caption {{
-                padding: 8px;
-                font-size: 11px;
-                font-weight: 500;
-                color: #333;
+                padding: 10px 8px;
+                font-size: 12px;
+                font-weight: 600;
+                color: #202124;
                 text-align: center;
                 word-break: break-word;
                 line-height: 1.3;
@@ -451,21 +477,20 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
         <div class="grid-container" id="tile-grid"></div>
 
         <script>
-            const paginas = {paginas_json};
+            const tegels = {tegels_json};
+            const alleDossiers = {alle_dossiers_json};
 
             function renderTiles() {{
                 const grid = document.getElementById('tile-grid');
                 grid.innerHTML = '';
 
-                paginas.forEach((item, index) => {{
+                tegels.forEach((item) => {{
                     const tile = document.createElement('div');
                     tile.className = 'tile';
-                    tile.onclick = () => openDriveOverlay(index);
+                    tile.onclick = () => openDriveOverlay(item.doc_id);
 
                     const imgUrl = `https://lh3.googleusercontent.com/d/${{item.id}}`;
-                    
-                    // Toon bestandsnaam of Doc_ID onder de tegel
-                    const labelTekst = item.naam || item.doc_id || `Pagina ${{index + 1}}`;
+                    const labelTekst = item.display_label || item.doc_id || item.naam;
 
                     tile.innerHTML = `
                         <div class="img-container">
@@ -477,9 +502,12 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
                 }});
             }}
 
-            function openDriveOverlay(startIndex) {{
+            function openDriveOverlay(docId) {{
                 const topDoc = window.top.document;
-                let currentIndex = startIndex;
+                
+                // Haal ALLE pagina's op van DIT specifieke document/dossier
+                const dossierPaginas = alleDossiers[docId] || [];
+                let currentIndex = 0;
 
                 const bestaandeModal = topDoc.getElementById('rbc-drive-modal');
                 if (bestaandeModal) bestaandeModal.remove();
@@ -522,20 +550,20 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
                 const nextBtn = topDoc.getElementById('rbc-next-btn');
 
                 function updateViewer() {{
-                    if (paginas.length === 0) return;
-                    const item = paginas[currentIndex];
+                    if (dossierPaginas.length === 0) return;
+                    const item = dossierPaginas[currentIndex];
                     
                     imgEl.style.opacity = '0.3';
                     imgEl.src = `https://lh3.googleusercontent.com/d/${{item.id}}`;
                     imgEl.onload = () => {{ imgEl.style.opacity = '1'; }};
 
-                    titleInfo.innerText = `${{item.naam}}  •  Pagina ${{currentIndex + 1}} van ${{paginas.length}}`;
+                    titleInfo.innerText = `${{item.naam}}  •  Pagina ${{currentIndex + 1}} van ${{dossierPaginas.length}}`;
 
                     prevBtn.style.opacity = (currentIndex === 0) ? '0.2' : '1';
                     prevBtn.style.pointerEvents = (currentIndex === 0) ? 'none' : 'auto';
 
-                    nextBtn.style.opacity = (currentIndex === paginas.length - 1) ? '0.2' : '1';
-                    nextBtn.style.pointerEvents = (currentIndex === paginas.length - 1) ? 'none' : 'auto';
+                    nextBtn.style.opacity = (currentIndex === dossierPaginas.length - 1) ? '0.2' : '1';
+                    nextBtn.style.pointerEvents = (currentIndex === dossierPaginas.length - 1) ? 'none' : 'auto';
                 }}
 
                 function sluitModal() {{
@@ -547,12 +575,12 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
                 function keyHandler(e) {{
                     if (e.key === 'Escape') sluitModal();
                     if (e.key === 'ArrowLeft' && currentIndex > 0) {{ currentIndex--; updateViewer(); }}
-                    if (e.key === 'ArrowRight' && currentIndex < paginas.length - 1) {{ currentIndex++; updateViewer(); }}
+                    if (e.key === 'ArrowRight' && currentIndex < dossierPaginas.length - 1) {{ currentIndex++; updateViewer(); }}
                 }}
 
                 closeBtn.onclick = sluitModal;
                 prevBtn.onclick = () => {{ if (currentIndex > 0) {{ currentIndex--; updateViewer(); }} }};
-                nextBtn.onclick = () => {{ if (currentIndex < paginas.length - 1) {{ currentIndex++; updateViewer(); }} }};
+                nextBtn.onclick = () => {{ if (currentIndex < dossierPaginas.length - 1) {{ currentIndex++; updateViewer(); }} }};
 
                 topDoc.addEventListener('keydown', keyHandler);
 
@@ -565,9 +593,8 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
     </html>
     """
 
-    # Bepaal dynamische hoogte van de HTML component op basis van het aantal tegels
-    aantal_items = len(actieve_paginas)
-    berekende_hoogte = max(240, ((aantal_items // 5) + 1) * 230)
+    aantal_tegels = len(tegel_items)
+    berekende_hoogte = max(260, ((aantal_tegels // 5) + 1) * 250)
 
     components.html(grid_html, height=berekende_hoogte, scrolling=True)
 

@@ -17,7 +17,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.7.2"
+APP_VERSION = "v2.8.0"
 APP_DATE = "2026"
 
 # SDK meldingen onderdrukken voor schone logs
@@ -130,10 +130,9 @@ with st.sidebar:
 
     with st.expander("💡 Tips voor het testen"):
         st.markdown("""
-        * **Muiswiel:** Scroll om in/uit te zoomen op de afbeelding.
-        * **Linkermuisknop:** Houd ingedrukt en sleep om te bewegen (pan).
-        * **Toetsenbord Navigatie:** Gebruik de pijltoetsen **`←` (Links)** en **`→` (Rechts)** op je toetsenbord om door pagina's te bladeren!
-        * **Pijlen op scherm:** Klik op de zwevende cirkels aan de zijkanten van de afbeelding.
+        * **Google Drive Viewer:** Klik op **"🔎 Open document in viewer"** om de pagina's te bekijken.
+        * **Muiswiel & Slepen:** Scroll om in/uit te zoomen, sleep om door de pagina te bewegen.
+        * **Sneltoetsen:** Gebruik **`←`** en **`→`** op je toetsenbord om te bladeren, of **`ESC`** om de viewer te sluiten.
         """)
 
 # Titel op de hoofdpagina
@@ -309,7 +308,7 @@ if st.session_state.start_zoekopdracht:
                 if b_naam and b_naam not in eind_bestanden_lijst:
                     eind_bestanden_lijst.append(b_naam)
 
-        # TOEPASSEN NATUURLIJKE SORTERING OP DE BESTANDENLIJST
+        # Natuurlijke sortering van bestanden
         eind_bestanden_lijst.sort(key=natuurlijke_sortering)
 
         with st.expander("🔍 Details van de geselecteerde documenten", expanded=True):
@@ -337,7 +336,6 @@ if st.session_state.start_zoekopdracht:
                             if res:
                                 blader_lijst.append({"doc_id": d_id, "naam": res[0]['name'], "id": res[0]['id'], "mime": res[0]['mimeType']})
 
-                # NATUURLIJKE SORTERING TOEPASSEN OP BLADERLIJST
                 blader_lijst.sort(key=natuurlijke_sortering)
                 st.session_state.blader_paginas = blader_lijst
 
@@ -358,14 +356,12 @@ if st.session_state.start_zoekopdracht:
                         f_data = req.execute()
                         img = Image.open(io.BytesIO(f_data)).convert('RGB')
                         
-                        # VERLAAGDE RESOLUTIE NAAR 600 PX VOOR MEMORY SAVING
                         img.thumbnail((600, 600))
                         img_byte_arr = io.BytesIO()
                         img.save(img_byte_arr, format='JPEG', quality=60)
 
                         onderzoeks_payload.append(types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/jpeg'))
 
-                # NATUURLIJKE SORTERING TOEPASSEN OP BLADERLIJST
                 st.session_state.blader_paginas.sort(key=natuurlijke_sortering)
 
         # Gemini Analyse
@@ -380,183 +376,260 @@ if st.session_state.start_zoekopdracht:
         st.session_state.start_zoekopdracht = False
 
 # ------------------------------------------------------------------------------
-# 5. GEAVANCEERDE GOOGLE DRIVE OVERLAY VIEWER (ZOOM, PAN, IN-FRAME BUTTONS, KEYBOARD)
+# 5. GEAVANCEERDE GOOGLE DRIVE OVERLAY VIEWER (GOOGLE DRIVE STYLE MODAL)
 # ------------------------------------------------------------------------------
 if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
-    st.subheader("📖 Geselecteerde bron / Blader door pagina's:")
-
+    
     unieke_dossiers = list(dict.fromkeys([p.get("doc_id", "Dossier 1") for p in st.session_state.blader_paginas if p.get("doc_id")]))
     
-    if len(unieke_dossiers) > 1:
-        gekozen_dossier = st.selectbox("📁 Switch van document/boek om te bekijken:", options=unieke_dossiers, index=0)
-        actieve_paginas = [p for p in st.session_state.blader_paginas if p.get("doc_id") == gekozen_dossier]
-        # SORTEER DE ACTIEVE PAGINA'S OOK VIA NATUURLIJKE SORTERING
-        actieve_paginas.sort(key=natuurlijke_sortering)
-    else:
-        actieve_paginas = st.session_state.blader_paginas
-        actieve_paginas.sort(key=natuurlijke_sortering)
+    with st.expander("📖 Geselecteerde bronnen / Documenten bekijken", expanded=True):
+        if len(unieke_dossiers) > 1:
+            gekozen_dossier = st.selectbox("📁 Selecteer document/boek om te bekijken:", options=unieke_dossiers, index=0)
+            actieve_paginas = [p for p in st.session_state.blader_paginas if p.get("doc_id") == gekozen_dossier]
+            actieve_paginas.sort(key=natuurlijke_sortering)
+        else:
+            actieve_paginas = st.session_state.blader_paginas
+            actieve_paginas.sort(key=natuurlijke_sortering)
 
-    # Converteer paginagegevens naar JSON voor de JavaScript-viewer
-    paginas_json = json.dumps(actieve_paginas)
+        st.write(f"Inhoud: **{len(actieve_paginas)} pagina('s)** beschikbaar.")
 
-    # HTML / CSS / JS Viewer Component met zwevende bediening en sneltoetsen
-    custom_viewer_html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <style>
-            * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-            body, html {{ width: 100%; height: 100%; background-color: #121212; overflow: hidden; font-family: sans-serif; }}
-            
-            #viewer-container {{
-                position: relative;
-                width: 100%;
-                height: 100vh;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                background-color: #121212;
-            }}
+        # Converteer paginagegevens naar JSON voor JavaScript
+        paginas_json = json.dumps(actieve_paginas)
 
-            iframe {{
-                width: 100%;
-                height: 100%;
-                border: none;
-            }}
+        # HTML / CSS / JS Modal Component (Google Drive Overlay Style)
+        modal_viewer_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+                body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
 
-            /* Navigatiepijlen zwevend op de foto */
-            .nav-btn {{
-                position: absolute;
-                top: 50%;
-                transform: translateY(-50%);
-                width: 52px;
-                height: 52px;
-                background-color: rgba(30, 30, 30, 0.75);
-                color: #ffffff;
-                border: 1px solid rgba(255, 255, 255, 0.2);
-                border-radius: 50%;
-                font-size: 28px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                cursor: pointer;
-                user-select: none;
-                z-index: 9999;
-                transition: background-color 0.2s, transform 0.1s;
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-            }}
-
-            .nav-btn:hover {{
-                background-color: rgba(60, 60, 60, 0.95);
-                transform: translateY(-50%) scale(1.08);
-            }}
-
-            .nav-btn.disabled {{
-                opacity: 0.25;
-                cursor: not-allowed;
-                pointer-events: none;
-            }}
-
-            #prev-btn {{ left: 20px; }}
-            #next-btn {{ right: 20px; }}
-
-            /* Pagina-indicator balk onderin het frame */
-            #info-bar {{
-                position: absolute;
-                bottom: 20px;
-                left: 50%;
-                transform: translateX(-50%);
-                background-color: rgba(20, 20, 20, 0.85);
-                color: #ffffff;
-                padding: 8px 20px;
-                border-radius: 20px;
-                font-size: 14px;
-                font-weight: 500;
-                letter-spacing: 0.3px;
-                border: 1px solid rgba(255, 255, 255, 0.15);
-                box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-                z-index: 9999;
-                pointer-events: none;
-                text-align: center;
-                max-width: 80%;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-            }}
-        </style>
-    </head>
-    <body>
-        <div id="viewer-container" tabindex="0">
-            <iframe id="drive-iframe" src=""></iframe>
-            <div id="prev-btn" class="nav-btn" onclick="vorigePagina()" title="Vorige pagina (Pijltje Links)">&#8249;</div>
-            <div id="next-btn" class="nav-btn" onclick="volgendePagina()" title="Volgende pagina (Pijltje Rechts)">&#8250;</div>
-            <div id="info-bar">Laden...</div>
-        </div>
-
-        <script>
-            const paginas = {paginas_json};
-            let currentIndex = 0;
-
-            const iframe = document.getElementById('drive-iframe');
-            const prevBtn = document.getElementById('prev-btn');
-            const nextBtn = document.getElementById('next-btn');
-            const infoBar = document.getElementById('info-bar');
-            const container = document.getElementById('viewer-container');
-
-            function updateViewer() {{
-                if (paginas.length === 0) return;
-                
-                const item = paginas[currentIndex];
-                iframe.src = `https://drive.google.com/file/d/${{item.id}}/preview`;
-                infoBar.innerText = `Pagina ${{currentIndex + 1}} van ${{paginas.length}} (${{item.naam}})`;
-
-                // Update knoppenstatus
-                if (currentIndex === 0) {{
-                    prevBtn.classList.add('disabled');
-                }} else {{
-                    prevBtn.classList.remove('disabled');
+                /* Knop om de viewer te openen */
+                .open-btn {{
+                    background-color: #1a73e8;
+                    color: white;
+                    border: none;
+                    padding: 10px 20px;
+                    font-size: 15px;
+                    font-weight: 500;
+                    border-radius: 6px;
+                    cursor: pointer;
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 8px;
+                    transition: background-color 0.2s, box-shadow 0.2s;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
                 }}
 
-                if (currentIndex === paginas.length - 1) {{
-                    nextBtn.classList.add('disabled');
-                }} else {{
-                    nextBtn.classList.remove('disabled');
+                .open-btn:hover {{
+                    background-color: #1557b0;
+                    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
                 }}
-            }}
 
-            function vorigePagina() {{
-                if (currentIndex > 0) {{
-                    currentIndex--;
+                /* Modal Overlay (Vult het gehele scherm, half-transparant) */
+                #modal-overlay {{
+                    display: none;
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100vw;
+                    height: 100vh;
+                    background-color: rgba(0, 0, 0, 0.75);
+                    backdrop-filter: blur(4px);
+                    z-index: 99999;
+                    flex-direction: column;
+                }}
+
+                /* Bovenbalk in Google Drive stijl */
+                #top-bar {{
+                    height: 56px;
+                    background-color: rgba(30, 30, 30, 0.95);
+                    display: flex;
+                    align-items: center;
+                    padding: 0 16px;
+                    color: #ffffff;
+                    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+                    z-index: 100000;
+                }}
+
+                .close-btn {{
+                    background: transparent;
+                    border: none;
+                    color: #ffffff;
+                    font-size: 24px;
+                    cursor: pointer;
+                    width: 40px;
+                    height: 40px;
+                    border-radius: 50%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    margin-right: 16px;
+                    transition: background-color 0.2s;
+                }}
+
+                .close-btn:hover {{
+                    background-color: rgba(255, 255, 255, 0.15);
+                }}
+
+                #title-info {{
+                    font-size: 15px;
+                    font-weight: 400;
+                    letter-spacing: 0.2px;
+                    color: #e8eaed;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                }}
+
+                /* Container voor iframe viewer */
+                #viewer-body {{
+                    position: relative;
+                    flex: 1;
+                    width: 100%;
+                    height: calc(100vh - 56px);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }}
+
+                iframe {{
+                    width: 100%;
+                    height: 100%;
+                    border: none;
+                }}
+
+                /* Navigatiepijlen zwevend over de foto */
+                .nav-btn {{
+                    position: absolute;
+                    top: 50%;
+                    transform: translateY(-50%);
+                    width: 48px;
+                    height: 48px;
+                    background-color: rgba(30, 30, 30, 0.8);
+                    color: #ffffff;
+                    border: 1px solid rgba(255, 255, 255, 0.2);
+                    border-radius: 50%;
+                    font-size: 26px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    cursor: pointer;
+                    user-select: none;
+                    z-index: 100001;
+                    transition: background-color 0.2s, transform 0.1s;
+                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+                }}
+
+                .nav-btn:hover {{
+                    background-color: rgba(60, 60, 60, 0.95);
+                    transform: translateY(-50%) scale(1.08);
+                }}
+
+                .nav-btn.disabled {{
+                    opacity: 0.2;
+                    cursor: not-allowed;
+                    pointer-events: none;
+                }}
+
+                #prev-btn {{ left: 24px; }}
+                #next-btn {{ right: 24px; }}
+            </style>
+        </head>
+        <body>
+
+            <button class="open-btn" onclick="openModal()">
+                <span>🔎</span> Open document in viewer (Volledig scherm)
+            </button>
+
+            <!-- Lightbox Overlay -->
+            <div id="modal-overlay">
+                <div id="top-bar">
+                    <button class="close-btn" onclick="closeModal()" title="Sluiten (ESC)">✕</button>
+                    <div id="title-info">Laden...</div>
+                </div>
+                <div id="viewer-body">
+                    <iframe id="drive-iframe" src=""></iframe>
+                    <div id="prev-btn" class="nav-btn" onclick="vorigePagina()" title="Vorige pagina (Pijltje Links)">&#8249;</div>
+                    <div id="next-btn" class="nav-btn" onclick="volgendePagina()" title="Volgende pagina (Pijltje Rechts)">&#8250;</div>
+                </div>
+            </div>
+
+            <script>
+                const paginas = {paginas_json};
+                let currentIndex = 0;
+
+                const overlay = document.getElementById('modal-overlay');
+                const iframe = document.getElementById('drive-iframe');
+                const prevBtn = document.getElementById('prev-btn');
+                const nextBtn = document.getElementById('next-btn');
+                const titleInfo = document.getElementById('title-info');
+
+                function openModal() {{
+                    overlay.style.display = 'flex';
+                    document.body.style.overflow = 'hidden';
                     updateViewer();
                 }}
-            }}
 
-            function volgendePagina() {{
-                if (currentIndex < paginas.length - 1) {{
-                    currentIndex++;
-                    updateViewer();
+                function closeModal() {{
+                    overlay.style.display = 'none';
+                    document.body.style.overflow = 'auto';
+                    iframe.src = ''; // Stop laden
                 }}
-            }}
 
-            // Toetsenbord pijltoetsen ondersteuning (← en →)
-            window.addEventListener('keydown', function(event) {{
-                if (event.key === "ArrowLeft") {{
-                    vorigePagina();
-                }} else if (event.key === "ArrowRight") {{
-                    volgendePagina();
+                function updateViewer() {{
+                    if (paginas.length === 0) return;
+                    
+                    const item = paginas[currentIndex];
+                    iframe.src = `https://drive.google.com/file/d/${{item.id}}/preview`;
+                    titleInfo.innerText = `${{item.naam}}  •  Pagina ${{currentIndex + 1}} van ${{paginas.length}}`;
+
+                    if (currentIndex === 0) {{
+                        prevBtn.classList.add('disabled');
+                    }} else {{
+                        prevBtn.classList.remove('disabled');
+                    }}
+
+                    if (currentIndex === paginas.length - 1) {{
+                        nextBtn.classList.add('disabled');
+                    }} else {{
+                        nextBtn.classList.remove('disabled');
+                    }}
                 }}
-            }});
 
-            // Zorg dat het frame meteen de focus heeft voor het toetsenbord
-            container.focus();
-            updateViewer();
-        </script>
-    </body>
-    </html>
-    """
+                function vorigePagina() {{
+                    if (currentIndex > 0) {{
+                        currentIndex--;
+                        updateViewer();
+                    }}
+                }}
 
-    # Render de custom viewer in Streamlit
-    components.html(custom_viewer_html, height=680)
+                function volgendePagina() {{
+                    if (currentIndex < paginas.length - 1) {{
+                        currentIndex++;
+                        updateViewer();
+                    }}
+                }}
+
+                // Sneltoetsen: Pijltoetsen + ESC om te sluiten
+                window.addEventListener('keydown', function(event) {{
+                    if (overlay.style.display === 'flex') {{
+                        if (event.key === "ArrowLeft") {{
+                            vorigePagina();
+                        }} else if (event.key === "ArrowRight") {{
+                            volgendePagina();
+                        }} else if (event.key === "Escape") {{
+                            closeModal();
+                        }}
+                    }}
+                }});
+            </script>
+        </body>
+        </html>
+        """
+
+        components.html(modal_viewer_html, height=70)
 
 # ------------------------------------------------------------------------------
 # 6. HISTORISCH RAPPORT & CHAT

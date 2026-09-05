@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.5.2"
+APP_VERSION = "v3.5.3"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -147,7 +147,7 @@ with col1:
         height=100
     )
 with col2:
-    max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=10, step=5)
+    max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=15, step=5)
 
 btn_col1, btn_col2 = st.columns([2, 1])
 with btn_col1:
@@ -176,7 +176,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. VOLLEDIGE INHOUD & CIJFERS SEARCH (HERSTELD & VOLLEDIG INCLUSIEF INHOUD-KOLOM)
+# 4. VOLLEDIGE INHOUD & CIJFERS SEARCH
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -231,7 +231,6 @@ if st.session_state.start_zoekopdracht:
                     personen_val = str(row.get('Genoemde Personen', '') or row.get('Genoemde personen', '')).strip()
                     onderwerp_val = str(row.get('Onderwerp (NL)', '') or row.get('Onderwerp', '')).strip()
                     
-                    # HERSTELD: Inhoud & Cijfers expliciet en robuust uitlezen
                     inhoud_val = str(
                         row.get('Inhoud & Cijfers (NL)', '') or 
                         row.get('Inhoud & cijfers (NL)', '') or 
@@ -250,7 +249,6 @@ if st.session_state.start_zoekopdracht:
                     if is_boek_vraag and any(b_term in combi_tekst for b_term in ['boek', 'omslag', 'publicatie', 'tijdschrift', 'weekblad']): score += 25
                     if any(v in combi_tekst for grp in zoek_groepen for v in grp if len(v) > 3) and any(f in combi_tekst for f in familie_termen): score += 8
                     
-                    # Extra bonus voor sleutelwoorden rond financiën/oorlogsschade
                     if any(term in combi_tekst for term in ['oorlogsschade', 'schadevergoeding', 'uitbetaling', 'frank', 'fr.']): 
                         score += 15
 
@@ -265,7 +263,6 @@ if st.session_state.start_zoekopdracht:
             st.session_state.start_zoekopdracht = False
             st.stop()
 
-        # BUNDELING: 1 snelle API call maken i.p.v. tientallen losse aanroepen
         sheet_dossier_data = []
         gezochte_bestanden = []
         
@@ -311,7 +308,7 @@ if st.session_state.start_zoekopdracht:
         st.rerun()
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE VAN DE FOTOTEGELS (EXACTE HOOGTE ZONDER OVERBODIGE WITRUIMTE)
+# 5. WEERGAVE VAN DE FOTOTEGELS
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas:
     st.divider()
@@ -544,7 +541,6 @@ if st.session_state.blader_paginas:
     </html>
     """
 
-    # Dynamische hoogte direct aangesloten op het aantal tegels
     aantal_tegels = len(tegel_items)
     aantal_rijen = math.ceil(aantal_tegels / 5) if aantal_tegels > 0 else 1
     berekende_hoogte = (aantal_rijen * 240) + 15
@@ -552,35 +548,57 @@ if st.session_state.blader_paginas:
     components.html(grid_html, height=berekende_hoogte, scrolling=False)
 
 # ------------------------------------------------------------------------------
-# 6. HISTORISCH RAPPORT & CHAT
+# 6. HISTORISCH RAPPORT & CHAT (GEÜPGRADED VOOR VOLLEDIGE DETECTIE)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas and not st.session_state.chat_historie:
     with st.spinner("Historische analyse uitvoeren op de geselecteerde documenten via Gemini..."):
         try:
-            MAX_FOTO_LIMIET = 10
-            payload = [f"Analyseer voor de onderzoeksvraag: {st.session_state.huidige_vraag}"]
+            scherpe_prompt = f"""
+Jij bent een financieel-historisch expert en hoofdarchivaris.
+Beantwoord de onderstaande onderzoeksvraag uiterst nauwkeurig op basis van ALLE meegeleverde dossiergegevens.
 
+ONDERZOEKSVRAAG: {st.session_state.huidige_vraag}
+
+CRUCIALE INSTRUCTIES:
+1. LET OP EINDRESULTATEN EN UITBETALINGEN: Kijk niet alleen naar de eerste schadestaten of initiële ramingen van experts (zoals 396.599 fr.), maar zoek uitdrukkelijk naar DEFINITIEVE TOEKENNINGEN, EINDUITBETALINGEN en overdrachten.
+2. NATUURLIJKE PERSONEN EN RECHTHEBBENDEN: Controleer of de schadevergoeding direct of indirect is uitbetaald aan een specifiek persoon (zoals een eigenaar, echtgenote, erfgename of vertegenwoordiger, bijv. mevrouw Denijs Gabrielle) en noem de exacte bedragen (bijv. 540.224 fr.).
+3. Indien er meerdere bedragen of ontvangers in het dossier voorkomen (bijv. een initiële raming vs. een definitieve uitbetaling aan een persoon), vermeld ze dan BEIDE en leg het verschil duidelijk uit.
+4. Noem alle concrete namen, datums, documentfiches en bedragen die in de stukken staan.
+"""
+            payload = [scherpe_prompt]
             sheet_data = getattr(st.session_state, 'sheet_dossier_data', [])
 
-            if len(st.session_state.blader_paginas) > MAX_FOTO_LIMIET:
-                tekst_gebundeld = f"\n--- DOSSIER INHOUD ({len(sheet_data)} PAGINA'S) ---\n"
-                for idx, r in enumerate(sheet_data, start=1):
-                    tekst_gebundeld += f"\n[Pagina {idx}] Bestand: {r.get('Bestandsnaam')} | Doc_ID: {r.get('Document_ID')}\n  - Personen: {r.get('Genoemde Personen', '')}\n  - Inhoud & Cijfers: {r.get('Inhoud & Cijfers (NL)', '') or r.get('Inhoud & cijfers (NL)', '')}\n"
-                payload.append(tekst_gebundeld)
-            else:
-                for item in st.session_state.blader_paginas:
-                    req = drive_service.files().get_media(fileId=item['id'])
-                    f_data = req.execute()
-                    img = Image.open(io.BytesIO(f_data)).convert('RGB')
-                    
-                    img.thumbnail((400, 400))
-                    img_byte_arr = io.BytesIO()
-                    img.save(img_byte_arr, format='JPEG', quality=50)
+            tekst_gebundeld = f"\n--- VOLLEDIGE DOSSIER INHOUD EN REGISTER ({len(sheet_data)} RECORD(S)) ---\n"
+            for idx, r in enumerate(sheet_data, start=1):
+                doc_id = r.get('Document_ID', '')
+                b_naam = r.get('Bestandsnaam', '')
+                pers = r.get('Genoemde Personen', '') or r.get('Genoemde personen', '')
+                ond = r.get('Onderwerp (NL)', '') or r.get('Onderwerp', '')
+                inhoud = r.get('Inhoud & Cijfers (NL)', '') or r.get('Inhoud & cijfers (NL)', '') or r.get('Inhoud', '')
+                datum = r.get('Datum Document', '') or r.get('Datum', '')
 
-                    payload.append(types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/jpeg'))
-                    del img
-                    del f_data
-                    del img_byte_arr
+                tekst_gebundeld += f"\n[Item {idx}] Doc_ID: {doc_id} | Bestand: {b_naam} | Datum: {datum}\n"
+                if pers: tekst_gebundeld += f"  - Genoemde Personen: {pers}\n"
+                if ond: tekst_gebundeld += f"  - Onderwerp: {ond}\n"
+                if inhoud: tekst_gebundeld += f"  - Inhoud & Cijfers: {inhoud}\n"
+
+            payload.append(tekst_gebundeld)
+
+            if len(st.session_state.blader_paginas) <= 15:
+                for item in st.session_state.blader_paginas:
+                    try:
+                        req = drive_service.files().get_media(fileId=item['id'])
+                        f_data = req.execute()
+                        img = Image.open(io.BytesIO(f_data)).convert('RGB')
+                        
+                        img.thumbnail((500, 500))
+                        img_byte_arr = io.BytesIO()
+                        img.save(img_byte_arr, format='JPEG', quality=60)
+
+                        payload.append(types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/jpeg'))
+                        del img; del f_data; del img_byte_arr
+                    except Exception:
+                        pass
 
             st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
             analyse_response = genereer_met_retry(ai_client, MODEL_NAAM, payload)

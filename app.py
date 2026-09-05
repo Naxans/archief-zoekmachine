@@ -5,7 +5,7 @@ import logging
 import warnings
 import json
 import re
-import gc  # Dwingt Python om ongebruikt RAM-geheugen direct vrij te maken
+import gc
 import streamlit as st
 import streamlit.components.v1 as components
 from PIL import Image
@@ -18,7 +18,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.3.2"
+APP_VERSION = "v3.3.3"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -114,9 +114,11 @@ with st.sidebar:
     st.title("ℹ️ Help & Info")
     with st.expander("🚨 Belangrijke informatie & Foutmeldingen"):
         st.markdown("""
-        **1. Rood blok met foutmelding (bijv. 429 RESOURCE_EXHAUSTED)?** Deze zoekmachine maakt gebruik van een gratis AI-model met een dagelijks limiet. Krijg je een melding over 'quota'? Probeer het later opnieuw.
+        **1. Afbeeldingen laden niet?**  
+        Zorg dat de bestanden/map in Google Drive zijn ingesteld op **'Iedereen met de link kan bekijken'**.
 
-        **2. Houd rekening met mogelijke fouten in de AI-analyse** Controleer cruciale informatie altijd in het originele archiefdocument!
+        **2. Rood blok met foutmelding (bijv. 429 RESOURCE_EXHAUSTED)?**  
+        Deze zoekmachine maakt gebruik van een gratis AI-model met een dagelijks limiet. Probeer het later opnieuw.
         """)
     with st.expander("💡 Tips voor het testen"):
         st.markdown("""
@@ -154,7 +156,6 @@ with btn_col2:
     stop_button = st.button("⛔ Stop / Annuleer", type="secondary", use_container_width=True)
 
 if submit_button:
-    # Wis oude sessies en dwing direct RAM geheugenopruiming af
     st.session_state.blader_paginas = []
     st.session_state.onderzoeks_payload = None
     st.session_state.chat_historie = []
@@ -254,7 +255,6 @@ if st.session_state.start_zoekopdracht:
             st.session_state.start_zoekopdracht = False
             st.stop()
 
-        # Verzamel bestanden uit Drive
         eind_bestanden_lijst = []
         sheet_dossier_data = []
 
@@ -303,19 +303,16 @@ if st.session_state.start_zoekopdracht:
 
                         blader_lijst.append({"doc_id": doc_id_val, "naam": f['name'], "id": f['id'], "mime": f['mimeType']})
 
-                        # Geheugensparende afbeeldingsverwerking
                         req = drive_service.files().get_media(fileId=f['id'])
                         f_data = req.execute()
                         img = Image.open(io.BytesIO(f_data)).convert('RGB')
                         
-                        # Thumbnail verkleind naar 400px voor minimale RAM belasting
                         img.thumbnail((400, 400))
                         img_byte_arr = io.BytesIO()
                         img.save(img_byte_arr, format='JPEG', quality=50)
 
                         payload.append(types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/jpeg'))
                         
-                        # Ruim verwerkte objecten direct op
                         del img
                         del f_data
                         del img_byte_arr
@@ -328,7 +325,7 @@ if st.session_state.start_zoekopdracht:
         st.rerun()
 
 # ------------------------------------------------------------------------------
-# 5. KLIKBARE FOTOTEGELS (WORDT DIRECT AFGEBEELD)
+# 5. KLIKBARE FOTOTEGELS (HERSTELDE AFBEELDINGS-URL)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas:
     st.divider()
@@ -436,6 +433,14 @@ if st.session_state.blader_paginas:
             const tegels = {tegels_json};
             const alleDossiers = {alle_dossiers_json};
 
+            function getImageUrl(fileId) {{
+                return "https://lh3.googleusercontent.com/d/" + fileId;
+            }}
+
+            function getFallbackUrl(fileId) {{
+                return "https://drive.google.com/thumbnail?id=" + fileId + "&sz=w600";
+            }}
+
             function renderTiles() {{
                 const grid = document.getElementById('tile-grid');
                 grid.innerHTML = '';
@@ -445,12 +450,13 @@ if st.session_state.blader_paginas:
                     tile.className = 'tile';
                     tile.onclick = () => openDriveOverlay(item.doc_id);
 
-                    const imgUrl = `https://lh3.googleusercontent.com/d/$${{item.id}}`;
+                    const primaryUrl = getImageUrl(item.id);
+                    const fallbackUrl = getFallbackUrl(item.id);
                     const labelTekst = item.display_label || item.doc_id || item.naam;
 
                     tile.innerHTML = `
                         <div class="img-container">
-                            <img src="${{imgUrl}}" loading="lazy" alt="${{labelTekst}}" />
+                            <img src="${{primaryUrl}}" onerror="this.onerror=null; this.src='${{fallbackUrl}}';" loading="lazy" alt="${{labelTekst}}" />
                         </div>
                         <div class="tile-caption">${{labelTekst}}</div>
                     `;
@@ -509,7 +515,11 @@ if st.session_state.blader_paginas:
                     const item = dossierPaginas[currentIndex];
                     
                     imgEl.style.opacity = '0.3';
-                    imgEl.src = `https://lh3.googleusercontent.com/d/$${{item.id}}`;
+                    const mainSrc = getImageUrl(item.id);
+                    const altSrc = getFallbackUrl(item.id);
+                    
+                    imgEl.onerror = () => {{ imgEl.onerror = null; imgEl.src = altSrc; }};
+                    imgEl.src = mainSrc;
                     imgEl.onload = () => {{ imgEl.style.opacity = '1'; }};
 
                     titleInfo.innerText = `${{item.naam}}  •  Pagina ${{currentIndex + 1}} van ${{dossierPaginas.length}}`;
@@ -553,7 +563,7 @@ if st.session_state.blader_paginas:
     components.html(grid_html, height=berekende_hoogte, scrolling=True)
 
 # ------------------------------------------------------------------------------
-# 6. HISTORISCH RAPPORT & CHAT (VOERT NÁ HET TONEN VAN DE TEGELS DE GEMINI-ANALYSE UIT)
+# 6. HISTORISCH RAPPORT & CHAT
 # ------------------------------------------------------------------------------
 if st.session_state.onderzoeks_payload and not st.session_state.chat_historie:
     with st.spinner("Historische analyse uitvoeren via Gemini..."):
@@ -561,11 +571,8 @@ if st.session_state.onderzoeks_payload and not st.session_state.chat_historie:
             st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
             analyse_response = genereer_met_retry(ai_client, MODEL_NAAM, st.session_state.onderzoeks_payload)
             st.session_state.chat_historie.append(("assistant", analyse_response.text))
-            
-            # Ruim het zware payload-object meteen op uit het geheugen
             st.session_state.onderzoeks_payload = None
             gc.collect()
-            
             st.rerun()
         except Exception as e:
             st.error(f"Fout tijdens analyse: {e}")

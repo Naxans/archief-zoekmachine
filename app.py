@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.8.0"
+APP_VERSION = "v3.8.1"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -184,7 +184,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. RANKING EN SCORING (UITGEBREID VOOR STAATSBLADEN & BESTUURSLEDEN)
+# 4. RANKING EN SCORING (VERBETERT VOOR EXACTE STAATSBLAD-JAARTALLEN)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -209,16 +209,20 @@ if st.session_state.start_zoekopdracht:
 
             vraag_norm = normaliseer_tekst(st.session_state.huidige_vraag)
             
+            # Detecteer jaartallen in de vraag (bijv. 1936)
+            gevonden_jaren = re.findall(r'\b(19\d{2}|20\d{2})\b', vraag_norm)
+
             is_schade_vraag = any(w in vraag_norm for w in ['schade', 'oorlogsschade', 'vergoeding', 'bedrag', 'uitgekeerd', 'frank', 'frs', 'betaald'])
             is_boek_vraag = any(w in vraag_norm for w in ['boek', 'rutten', 'mathieu', 'delvoie', 'elektriciteitscentrale', 'geschreven'])
             is_radio_vraag = any(w in vraag_norm for w in ['radio', 'model', 'vedette', 'auditorium', 'classic', 'standard', 'grandluxe', 'royal', 'record'])
-            is_bestuur_vraag = any(w in vraag_norm for w in ['bestuur', 'bestuurslid', 'bestuursleden', 'directeur', 'oprichting', 'staatsblad', 'statuten', 'stichter', 'aandeelhouder', 'raad van bestuur'])
+            is_bestuur_vraag = any(w in vraag_norm for w in ['bestuur', 'bestuurslid', 'bestuursleden', 'directeur', 'oprichting', 'staatsblad', 'statuten', 'stichter', 'aandeelhouder', 'raad van bestuur', 'firma', 'vennootschap'])
 
             dossier_scores = {}
 
             for row in data:
                 doc_id = str(row.get('Document_ID', '')).strip()
                 b_naam = str(row.get('Bestandsnaam', '')).strip()
+                datum_veld = str(row.get('Datum', '')).strip()
                 if not doc_id:
                     doc_id = f"SINGLE_{b_naam}"
 
@@ -226,17 +230,21 @@ if st.session_state.start_zoekopdracht:
                 ond = normaliseer_tekst(row.get('Onderwerp (NL)') or row.get('Onderwerp') or '')
                 inhoud = normaliseer_tekst(row.get('Inhoud & Cijfers (NL)') or row.get('Inhoud & cijfers') or row.get('Inhoud') or '')
                 
-                combi_tekst = f"{doc_id.lower()} {b_naam.lower()} {pers} {ond} {inhoud}"
+                combi_tekst = f"{doc_id.lower()} {b_naam.lower()} {datum_veld.lower()} {pers} {ond} {inhoud}"
 
                 score = 0
 
                 if is_bestuur_vraag:
-                    if any(w in combi_tekst for w in ['staatsblad', 'moniteur', 'oprichting', 'statuten', 'bijlagen', 'actes']):
-                        score += 200
-                    if any(w in combi_tekst for w in ['bestuur', 'beheerder', 'administrateur', 'benoeming', 'raad']):
-                        score += 100
-                    if '1936' in vraag_norm and '1936' in combi_tekst:
+                    # Basiskenmerken voor staatsbladen/akten
+                    if any(w in combi_tekst for w in ['staatsblad', 'moniteur', 'oprichting', 'statuten', 'bijlagen', 'actes', 'balans', 'jaarrekening']):
+                        score += 150
+                    if any(w in combi_tekst for w in ['bestuur', 'beheerder', 'administrateur', 'benoeming', 'raad', 'vennootschap']):
                         score += 80
+
+                    # Matchen op specifiek jaartal (zoals 1936)
+                    for yr in gevonden_jaren:
+                        if yr in combi_tekst:
+                            score += 250  # Enorme bonus voor het exacte jaartal in staatsbladen!
 
                 elif is_boek_vraag:
                     if 'rutten' in combi_tekst or 'mathieu' in combi_tekst or 'delvoie' in combi_tekst:
@@ -603,7 +611,7 @@ INSTRUCTIES VOOR JE RAPPORT:
 2. Vermeld expliciet ÁLLE betrokken namen van personen (bijv. eisers, gemachtigden, bestuurders, oprichters) én de officiële bedrijfsnamen.
 3. Als de vraag gaat over bestuursleden of de raad van bestuur, vermeld dan hun specifieke functies (voorzitter, beheerder, afgevaardigd bestuurder) indien bekend.
 4. Structureer je antwoord helder met duidelijke kopjes en een conclusie.
-5. Citeer steeds de bestandsnaam (bijv. 'DOC_0170', 'DOC_0237' of de specifieke PDF-naam) wanneer je naar specifieke informatie verwijst.
+5. Citeer steeds de bestandsnaam (bijv. 'DOC_0170', 'DOC_0516' of de specifieke PDF-naam) wanneer je naar specifieke informatie verwijst.
 """
             payload = [onderzoeks_prompt]
             sheet_data = getattr(st.session_state, 'sheet_dossier_data', [])

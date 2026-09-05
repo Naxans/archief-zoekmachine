@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.6.6"
+APP_VERSION = "v3.6.7"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -28,6 +28,15 @@ warnings.filterwarnings("ignore")
 def natuurlijke_sortering(item):
     tekst = item.get('naam', '') if isinstance(item, dict) else str(item)
     return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', tekst)]
+
+def normaliseer_tekst(tekst):
+    """Zet tekst om naar lowercase en vangt spellingsvariaties op (zoals ij <-> y)."""
+    if not tekst:
+        return ""
+    tekst = str(tekst).lower()
+    # Vervang 'ij' door 'y' zodat Denijs en Denys exact hetzelfde matchen
+    tekst = tekst.replace('ij', 'y')
+    return tekst
 
 # ------------------------------------------------------------------------------
 # 1. AUTHENTICATIE VIA STREAMLIT SECRETS
@@ -143,7 +152,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: wat staat in het boek geschreven door Mathieu rutten over de elektriciteitscentrale in tongeren',
+        placeholder='Bijv: geef me de naam en de grootte van het bedrag dat werd betaald door oorlogsschade van de firma radio belge de construction',
         height=100
     )
 with col2:
@@ -176,7 +185,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. HERZIENE RANKING EN SCORING (STABILITEIT VOOR ALLE VRAGEN)
+# 4. HERZIENE RANKING EN SCORING (INCLUSIEF I/Y SLIMME MATCHING)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -199,11 +208,12 @@ if st.session_state.start_zoekopdracht:
                 st.session_state.start_zoekopdracht = False
                 st.stop()
 
-            vraag_lc = st.session_state.huidige_vraag.lower()
+            # Normaliseer de onderzoeksvraag (lowercase + ij -> y)
+            vraag_norm = normaliseer_tekst(st.session_state.huidige_vraag)
             
             # Detecteer zoekintentie
-            is_schade_vraag = any(w in vraag_lc for w in ['schade', 'oorlogsschade', 'vergoeding', 'bedrag', 'uitgekeerd', 'frank', 'frs', 'betaald', 'firma'])
-            is_boek_vraag = any(w in vraag_lc for w in ['boek', 'rutten', 'mathieu', 'elektriciteitscentrale', 'geschreven'])
+            is_schade_vraag = any(w in vraag_norm for w in ['schade', 'oorlogsschade', 'vergoeding', 'bedrag', 'uitgekeerd', 'frank', 'frs', 'betaald', 'firma'])
+            is_boek_vraag = any(w in vraag_norm for w in ['boek', 'rutten', 'mathieu', 'elektriciteitscentrale', 'geschreven'])
 
             dossier_scores = {}
 
@@ -213,9 +223,9 @@ if st.session_state.start_zoekopdracht:
                 if not doc_id:
                     doc_id = f"SINGLE_{b_naam}"
 
-                pers = str(row.get('Genoemde Personen') or row.get('Genoemde personen') or '').lower()
-                ond = str(row.get('Onderwerp (NL)') or row.get('Onderwerp') or '').lower()
-                inhoud = str(row.get('Inhoud & Cijfers (NL)') or row.get('Inhoud & cijfers') or row.get('Inhoud') or '').lower()
+                pers = normaliseer_tekst(row.get('Genoemde Personen') or row.get('Genoemde personen') or '')
+                ond = normaliseer_tekst(row.get('Onderwerp (NL)') or row.get('Onderwerp') or '')
+                inhoud = normaliseer_tekst(row.get('Inhoud & Cijfers (NL)') or row.get('Inhoud & cijfers') or row.get('Inhoud') or '')
                 
                 combi_tekst = f"{doc_id.lower()} {b_naam.lower()} {pers} {ond} {inhoud}"
 
@@ -242,11 +252,11 @@ if st.session_state.start_zoekopdracht:
                     if 'totaal_16' in b_naam.lower() or 'radio-weekblad' in combi_tekst or 'annex' in b_naam.lower():
                         score -= 30
 
-                # Generieke trefwoord-score voor overige vragen
-                for woord in re.sub(r'[^\w\s]', ' ', vraag_lc).split():
-                    if len(woord) >= 4 and woord not in ['geef', 'naam', 'grootte', 'bedrag', 'staat', 'boek', 'over', 'door']:
+                # Generieke trefwoord-score met 'ij/y' automatische ondersteuning
+                for woord in re.sub(r'[^\w\s]', ' ', vraag_norm).split():
+                    if len(woord) >= 3 and woord not in ['geef', 'naam', 'grootte', 'bedrag', 'staat', 'boek', 'over', 'door', 'van', 'het']:
                         if woord in combi_tekst:
-                            score += 10
+                            score += 25
 
                 if score > 0:
                     dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + score
@@ -561,10 +571,10 @@ ONDERZOEKSVRAAG: {st.session_state.huidige_vraag}
 
 INSTRUCTIES VOOR JE RAPPORT:
 1. Richt je specifiek op de gevraagde thema's, personen, locaties, bedragen, boeken of documenten.
-2. Vermeld expliciet alle relevante feiten, namen en citaten uit het boek/document.
-3. Als de vraag gaat over een schadeclaim/uitbetaling, vermeld dan het exacte bedrag, de verdeling en de betrokken gemachtigden/ondernemingen.
+2. Vermeld expliciet ÁLLE betrokken namen van personen (bijv. eisers, gemachtigden, echtgenotes/weduwen zoals Gabrielle Denijs/Denys, bestuurders) én de officiële bedrijfsnamen.
+3. Als de vraag gaat over een schadeclaim of uitbetaling, vermeld dan het exacte bedrag, de verdeling en alle personen die genoemd worden in de relevante documenten.
 4. Structureer je antwoord helder met duidelijke kopjes en een conclusie.
-5. Citeer steeds de bestandsnaam (bijv. 'DOC_0001' of 'DOC_0169') wanneer je naar specifieke informatie op een document verwijst.
+5. Citeer steeds de bestandsnaam (bijv. 'DOC_0170') wanneer je naar specifieke informatie verwijst.
 """
             payload = [onderzoeks_prompt]
             sheet_data = getattr(st.session_state, 'sheet_dossier_data', [])

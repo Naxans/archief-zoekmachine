@@ -130,7 +130,7 @@ with st.sidebar:
 
     with st.expander("💡 Tips voor het testen"):
         st.markdown("""
-        * **Google Drive Viewer:** Klik op **"🔎 Open document in viewer"** om de pagina's te bekijken.
+        * **Google Drive Viewer:** Klik op **"🔎 Open document in viewer"** om de pagina's in volledig scherm te bekijken.
         * **Muiswiel & Slepen:** Scroll om in/uit te zoomen, sleep om door de pagina te bewegen.
         * **Sneltoetsen:** Gebruik **`←`** en **`→`** op je toetsenbord om te bladeren, of **`ESC`** om de viewer te sluiten.
         """)
@@ -376,7 +376,7 @@ if st.session_state.start_zoekopdracht:
         st.session_state.start_zoekopdracht = False
 
 # ------------------------------------------------------------------------------
-# 5. GEAVANCEERDE GOOGLE DRIVE OVERLAY VIEWER (GOOGLE DRIVE STYLE MODAL)
+# 5. ECHTE FULLSCREEN OVERLAY VIEWER (GOOGLE DRIVE STYLE VIA TOP DOM)
 # ------------------------------------------------------------------------------
 if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
     
@@ -393,19 +393,14 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
 
         st.write(f"Inhoud: **{len(actieve_paginas)} pagina('s)** beschikbaar.")
 
-        # Converteer paginagegevens naar JSON voor JavaScript
         paginas_json = json.dumps(actieve_paginas)
 
-        # HTML / CSS / JS Modal Component (Google Drive Overlay Style)
-        modal_viewer_html = f"""
+        fullscreen_overlay_html = f"""
         <!DOCTYPE html>
         <html>
         <head>
             <style>
-                * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-                body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
-
-                /* Knop om de viewer te openen */
+                body {{ margin: 0; padding: 0; font-family: sans-serif; background: transparent; }}
                 .open-btn {{
                     background-color: #1a73e8;
                     color: white;
@@ -418,218 +413,108 @@ if not st.session_state.start_zoekopdracht and st.session_state.blader_paginas:
                     display: inline-flex;
                     align-items: center;
                     gap: 8px;
-                    transition: background-color 0.2s, box-shadow 0.2s;
                     box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-                }}
-
-                .open-btn:hover {{
-                    background-color: #1557b0;
-                    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-                }}
-
-                /* Modal Overlay (Vult het gehele scherm, half-transparant) */
-                #modal-overlay {{
-                    display: none;
-                    position: fixed;
-                    top: 0;
-                    left: 0;
-                    width: 100vw;
-                    height: 100vh;
-                    background-color: rgba(0, 0, 0, 0.75);
-                    backdrop-filter: blur(4px);
-                    z-index: 99999;
-                    flex-direction: column;
-                }}
-
-                /* Bovenbalk in Google Drive stijl */
-                #top-bar {{
-                    height: 56px;
-                    background-color: rgba(30, 30, 30, 0.95);
-                    display: flex;
-                    align-items: center;
-                    padding: 0 16px;
-                    color: #ffffff;
-                    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-                    z-index: 100000;
-                }}
-
-                .close-btn {{
-                    background: transparent;
-                    border: none;
-                    color: #ffffff;
-                    font-size: 24px;
-                    cursor: pointer;
-                    width: 40px;
-                    height: 40px;
-                    border-radius: 50%;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    margin-right: 16px;
                     transition: background-color 0.2s;
                 }}
-
-                .close-btn:hover {{
-                    background-color: rgba(255, 255, 255, 0.15);
-                }}
-
-                #title-info {{
-                    font-size: 15px;
-                    font-weight: 400;
-                    letter-spacing: 0.2px;
-                    color: #e8eaed;
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                }}
-
-                /* Container voor iframe viewer */
-                #viewer-body {{
-                    position: relative;
-                    flex: 1;
-                    width: 100%;
-                    height: calc(100vh - 56px);
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                }}
-
-                iframe {{
-                    width: 100%;
-                    height: 100%;
-                    border: none;
-                }}
-
-                /* Navigatiepijlen zwevend over de foto */
-                .nav-btn {{
-                    position: absolute;
-                    top: 50%;
-                    transform: translateY(-50%);
-                    width: 48px;
-                    height: 48px;
-                    background-color: rgba(30, 30, 30, 0.8);
-                    color: #ffffff;
-                    border: 1px solid rgba(255, 255, 255, 0.2);
-                    border-radius: 50%;
-                    font-size: 26px;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    cursor: pointer;
-                    user-select: none;
-                    z-index: 100001;
-                    transition: background-color 0.2s, transform 0.1s;
-                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-                }}
-
-                .nav-btn:hover {{
-                    background-color: rgba(60, 60, 60, 0.95);
-                    transform: translateY(-50%) scale(1.08);
-                }}
-
-                .nav-btn.disabled {{
-                    opacity: 0.2;
-                    cursor: not-allowed;
-                    pointer-events: none;
-                }}
-
-                #prev-btn {{ left: 24px; }}
-                #next-btn {{ right: 24px; }}
+                .open-btn:hover {{ background-color: #1557b0; }}
             </style>
         </head>
         <body>
 
-            <button class="open-btn" onclick="openModal()">
-                <span>🔎</span> Open document in viewer (Volledig scherm)
+            <button class="open-btn" onclick="openDriveOverlay()">
+                🔎 Open document in viewer (Volledig scherm)
             </button>
-
-            <!-- Lightbox Overlay -->
-            <div id="modal-overlay">
-                <div id="top-bar">
-                    <button class="close-btn" onclick="closeModal()" title="Sluiten (ESC)">✕</button>
-                    <div id="title-info">Laden...</div>
-                </div>
-                <div id="viewer-body">
-                    <iframe id="drive-iframe" src=""></iframe>
-                    <div id="prev-btn" class="nav-btn" onclick="vorigePagina()" title="Vorige pagina (Pijltje Links)">&#8249;</div>
-                    <div id="next-btn" class="nav-btn" onclick="volgendePagina()" title="Volgende pagina (Pijltje Rechts)">&#8250;</div>
-                </div>
-            </div>
 
             <script>
                 const paginas = {paginas_json};
                 let currentIndex = 0;
 
-                const overlay = document.getElementById('modal-overlay');
-                const iframe = document.getElementById('drive-iframe');
-                const prevBtn = document.getElementById('prev-btn');
-                const nextBtn = document.getElementById('next-btn');
-                const titleInfo = document.getElementById('title-info');
+                function openDriveOverlay() {{
+                    // Bepaal de hoofd-document body (buiten het streamlit iframe)
+                    const topDoc = window.top.document;
+                    
+                    // Verwijder eventuele oude modal
+                    const bestaandeModal = topDoc.getElementById('rbc-drive-modal');
+                    if (bestaandeModal) bestaandeModal.remove();
 
-                function openModal() {{
-                    overlay.style.display = 'flex';
-                    document.body.style.overflow = 'hidden';
+                    // Maak de overlay container op de top-page
+                    const modal = topDoc.createElement('div');
+                    modal.id = 'rbc-drive-modal';
+                    modal.style.cssText = `
+                        position: fixed;
+                        top: 0;
+                        left: 0;
+                        width: 100vw;
+                        height: 100vh;
+                        background-color: rgba(0, 0, 0, 0.85);
+                        backdrop-filter: blur(5px);
+                        z-index: 9999999;
+                        display: flex;
+                        flex-direction: column;
+                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                    `;
+
+                    // Bovenbalk (Google Drive stijl)
+                    modal.innerHTML = `
+                        <div id="rbc-top-bar" style="height: 56px; background: rgba(20,20,20,0.95); display: flex; align-items: center; padding: 0 20px; color: white; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                            <button id="rbc-close-btn" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-right: 15px;" title="Sluiten (ESC)">✕</button>
+                            <div id="rbc-title-info" style="font-size: 15px; color: #e8eaed; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Laden...</div>
+                        </div>
+                        <div style="position: relative; flex: 1; width: 100%; height: calc(100vh - 56px);">
+                            <iframe id="rbc-iframe" style="width: 100%; height: 100%; border: none;" src=""></iframe>
+                            <div id="rbc-prev-btn" style="position: absolute; top: 50%; left: 20px; transform: translateY(-50%); width: 48px; height: 48px; background: rgba(30,30,30,0.8); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; font-size: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; z-index: 10;" title="Vorige pagina">&#8249;</div>
+                            <div id="rbc-next-btn" style="position: absolute; top: 50%; right: 20px; transform: translateY(-50%); width: 48px; height: 48px; background: rgba(30,30,30,0.8); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; font-size: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; z-index: 10;" title="Volgende pagina">&#8250;</div>
+                        </div>
+                    `;
+
+                    topDoc.body.appendChild(modal);
+                    topDoc.body.style.overflow = 'hidden';
+
+                    const iframe = topDoc.getElementById('rbc-iframe');
+                    const titleInfo = topDoc.getElementById('rbc-title-info');
+                    const closeBtn = topDoc.getElementById('rbc-close-btn');
+                    const prevBtn = topDoc.getElementById('rbc-prev-btn');
+                    const nextBtn = topDoc.getElementById('rbc-next-btn');
+
+                    function updateViewer() {{
+                        if (paginas.length === 0) return;
+                        const item = paginas[currentIndex];
+                        iframe.src = `https://drive.google.com/file/d/${{item.id}}/preview`;
+                        titleInfo.innerText = `${{item.naam}}  •  Pagina ${{currentIndex + 1}} van ${{paginas.length}}`;
+
+                        prevBtn.style.opacity = (currentIndex === 0) ? '0.2' : '1';
+                        prevBtn.style.pointerEvents = (currentIndex === 0) ? 'none' : 'auto';
+
+                        nextBtn.style.opacity = (currentIndex === paginas.length - 1) ? '0.2' : '1';
+                        nextBtn.style.pointerEvents = (currentIndex === paginas.length - 1) ? 'none' : 'auto';
+                    }}
+
+                    function sluitModal() {{
+                        modal.remove();
+                        topDoc.body.style.overflow = 'auto';
+                        topDoc.removeEventListener('keydown', keyHandler);
+                    }}
+
+                    function keyHandler(e) {{
+                        if (e.key === 'Escape') sluitModal();
+                        if (e.key === 'ArrowLeft' && currentIndex > 0) {{ currentIndex--; updateViewer(); }}
+                        if (e.key === 'ArrowRight' && currentIndex < paginas.length - 1) {{ currentIndex++; updateViewer(); }}
+                    }}
+
+                    closeBtn.onclick = sluitModal;
+                    prevBtn.onclick = () => {{ if (currentIndex > 0) {{ currentIndex--; updateViewer(); }} }};
+                    nextBtn.onclick = () => {{ if (currentIndex < paginas.length - 1) {{ currentIndex++; updateViewer(); }} }};
+
+                    topDoc.addEventListener('keydown', keyHandler);
+
                     updateViewer();
                 }}
-
-                function closeModal() {{
-                    overlay.style.display = 'none';
-                    document.body.style.overflow = 'auto';
-                    iframe.src = ''; // Stop laden
-                }}
-
-                function updateViewer() {{
-                    if (paginas.length === 0) return;
-                    
-                    const item = paginas[currentIndex];
-                    iframe.src = `https://drive.google.com/file/d/${{item.id}}/preview`;
-                    titleInfo.innerText = `${{item.naam}}  •  Pagina ${{currentIndex + 1}} van ${{paginas.length}}`;
-
-                    if (currentIndex === 0) {{
-                        prevBtn.classList.add('disabled');
-                    }} else {{
-                        prevBtn.classList.remove('disabled');
-                    }}
-
-                    if (currentIndex === paginas.length - 1) {{
-                        nextBtn.classList.add('disabled');
-                    }} else {{
-                        nextBtn.classList.remove('disabled');
-                    }}
-                }}
-
-                function vorigePagina() {{
-                    if (currentIndex > 0) {{
-                        currentIndex--;
-                        updateViewer();
-                    }}
-                }}
-
-                function volgendePagina() {{
-                    if (currentIndex < paginas.length - 1) {{
-                        currentIndex++;
-                        updateViewer();
-                    }}
-                }}
-
-                // Sneltoetsen: Pijltoetsen + ESC om te sluiten
-                window.addEventListener('keydown', function(event) {{
-                    if (overlay.style.display === 'flex') {{
-                        if (event.key === "ArrowLeft") {{
-                            vorigePagina();
-                        }} else if (event.key === "ArrowRight") {{
-                            volgendePagina();
-                        }} else if (event.key === "Escape") {{
-                            closeModal();
-                        }}
-                    }}
-                }});
             </script>
         </body>
         </html>
         """
 
-        components.html(modal_viewer_html, height=70)
+        components.html(fullscreen_overlay_html, height=60)
 
 # ------------------------------------------------------------------------------
 # 6. HISTORISCH RAPPORT & CHAT

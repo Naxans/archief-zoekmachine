@@ -176,7 +176,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. INTELLIGENTE SLIMME SELEKTIE VIA GEMINI FILTER (ZOALS IN DE WERKENDE VERSIE)
+# 4. INTELLIGENTE SLIMME SELEKTIE VIA GEMINI FILTER
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -199,7 +199,6 @@ if st.session_state.start_zoekopdracht:
                 st.session_state.start_zoekopdracht = False
                 st.stop()
 
-            # Bouw dossier samenvattingen voor Gemini om slim te matchen
             dossier_samenvattingen = {}
             for row in data:
                 doc_id = str(row.get('Document_ID', '')).strip()
@@ -277,7 +276,6 @@ Geef UITSLUITEND de exacte Document_ID's terug gescheiden door komma's, OF het w
             st.session_state.start_zoekopdracht = False
             st.stop()
 
-        # Ophalen van gekoppelde bestandsnamen
         sheet_dossier_data = []
         gezochte_bestanden = []
         
@@ -568,7 +566,7 @@ if st.session_state.blader_paginas:
 if st.session_state.blader_paginas and not st.session_state.chat_historie:
     with st.spinner("Stap 3/3: Historische en visuele analyse uitvoeren via Gemini..."):
         try:
-             onderzoeks_prompt = f"""
+            onderzoeks_prompt = f"""
 Jij bent een financieel-historisch expert en archivaris.
 Beantwoord de onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de meegeleverde originele archiefstukken (zowel tekst als afbeeldingen).
 

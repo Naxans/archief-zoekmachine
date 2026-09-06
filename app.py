@@ -15,15 +15,15 @@ from google.genai import types
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v3.8.1
+# Versie: v1.2.1
 # Datum: September 2026
 #
-# FEATURE:
+# FEATURE / FIX:
 # - Herstel van de originele, strakke, donkere fullscreen overlay (Foto 1).
-# - Directe Base64 afbeelding-rendering om 30s timeouts/crashes te voorkomen.
+# - Base64 afbeeldingsweergave om 30s timeouts/crashes definitief te voorkomen.
 # ==============================================================================
 
-APP_VERSIE = "v3.8.1 (2026)"
+APP_VERSIE = "v1.2.1 (2026)"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
@@ -106,7 +106,7 @@ def laad_drive_bestand_payload(drive_service, file_id, mime_type, file_name):
 
 @st.cache_data(ttl=3600)
 def haal_afbeelding_base64(file_id):
-    """Haalt afbeelding op en converteert naar base64 voor snelle weergave in overlay"""
+    """Haalt afbeelding op en converteert naar base64 voor snelle weergave in overlay zonder timeout"""
     try:
         request = drive_service.files().get_media(fileId=file_id)
         fh = io.BytesIO()
@@ -151,7 +151,7 @@ if "lightbox_pagina_idx" not in st.session_state:
     st.session_state.lightbox_pagina_idx = 0
 
 # ------------------------------------------------------------------------------
-# 3. INTERFACE & STYLING (EXACT ZOALS FOTO 1)
+# 3. INTERFACE & STYLING (DONKERE OVERLAY ZOALS FOTO 1)
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
@@ -182,7 +182,7 @@ st.markdown("""
     }
 
     /* FULLSCREEN OVERLAY CSS VOOR FOTO 1 WEERGAVE */
-    .v381-overlay-backdrop {
+    .v121-overlay-backdrop {
         position: fixed;
         top: 0;
         left: 0;
@@ -190,49 +190,6 @@ st.markdown("""
         height: 100vh;
         background-color: #121212;
         z-index: 999990;
-    }
-
-    .v381-overlay-container {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100vw;
-        height: 100vh;
-        z-index: 999999;
-        display: flex;
-        flex-direction: column;
-        background-color: #1a1a1a;
-    }
-
-    .v381-top-bar {
-        height: 48px;
-        background-color: #0d0d0d;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 0 16px;
-        border-bottom: 1px solid #2a2a2a;
-        color: #e0e0e0;
-        font-family: sans-serif;
-        font-size: 14px;
-    }
-
-    .v381-image-area {
-        flex: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        position: relative;
-        padding: 20px;
-        box-sizing: border-box;
-        overflow: hidden;
-    }
-
-    .v381-image-area img {
-        max-width: 90vw;
-        max-height: 85vh;
-        object-fit: contain;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.8);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -480,7 +437,7 @@ if st.session_state.lightbox_dossier:
     img_src = f"data:image/jpeg;base64,{img_b64}" if img_b64 else f"https://drive.google.com/thumbnail?id={actief_bestand['id']}&sz=w1600"
 
     # Donkere Achtergrond
-    st.markdown('<div class="v381-overlay-backdrop"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="v121-overlay-backdrop"></div>', unsafe_allow_html=True)
 
     # Top balk (Zwart met titel en sluitknop)
     top_col1, top_col2, top_col3 = st.columns([6, 2, 1])
@@ -489,7 +446,7 @@ if st.session_state.lightbox_dossier:
     with top_col2:
         st.markdown(f"<span style='color: #aaa;'>Pagina {curr_idx + 1} van {totaal_pags}</span>", unsafe_allow_html=True)
     with top_col3:
-        if st.button("✕ Sluiten", key="v381_close_btn", type="primary", use_container_width=True):
+        if st.button("✕ Sluiten", key="v121_close_btn", type="primary", use_container_width=True):
             st.session_state.lightbox_dossier = None
             st.rerun()
 
@@ -498,7 +455,7 @@ if st.session_state.lightbox_dossier:
 
     with nav_col1:
         st.markdown("<div style='height: 35vh;'></div>", unsafe_allow_html=True)
-        if st.button("◀", key="v381_prev_btn", use_container_width=True, disabled=(curr_idx == 0)):
+        if st.button("◀", key="v121_prev_btn", use_container_width=True, disabled=(curr_idx == 0)):
             st.session_state.lightbox_pagina_idx -= 1
             st.rerun()
 
@@ -511,6 +468,6 @@ if st.session_state.lightbox_dossier:
 
     with nav_col2:
         st.markdown("<div style='height: 35vh;'></div>", unsafe_allow_html=True)
-        if st.button("▶", key="v381_next_btn", use_container_width=True, disabled=(curr_idx == totaal_pags - 1)):
+        if st.button("▶", key="v121_next_btn", use_container_width=True, disabled=(curr_idx == totaal_pags - 1)):
             st.session_state.lightbox_pagina_idx += 1
             st.rerun()

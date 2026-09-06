@@ -13,19 +13,17 @@ from google.genai import types
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v1.0.0
+# Versie: v1.0.1
 # Datum: September 2026
 #
-# BELANGRIJKSTE VERNIEUWINGEN IN v1.0.0:
-# - Query Expansion (AI-Tussenstation): Gemini verrijkt de zoekopdracht van de
-#   gebruiker automatisch met Franse/Nederlandse naamvarianten (bijv. Emiel <-> Emile),
-#   historische synoniemen, initialen en chronologische logica (boekjaar vs. publicatiejaar).
-# - Automatische model-detectie en retry-logica voor stabiele API-calls.
-# - Multimodale verwerking: Haalt originele afbeeldingen/PDF's uit Google Drive
-#   voor een nauwkeurige OCR-analyse door Gemini.
+# CHRONOLOGISCHE VERSIE-HISTORIE:
+# - v3.8.1: Oorspronkelijke vertrouwde schermlayout en presentatie van rapport, bronnen en downloads.
+# - v1.0.0: Introductie van Query Expansion (AI-tussenstation) voor automatische verrijking 
+#           van zoekvragen (Franse/Nederlandse naamvarianten, synoniemen, chronologie).
+# - v1.0.1: Herstel van de exacte v3.8.1 schermlayout, verpakt in een schone v1.0.x versiestructuur.
 # ==============================================================================
 
-APP_VERSIE = "v1.0.0"
+APP_VERSIE = "v1.0.1"
 
 # SDK meldingen onderdrukken voor schone logs
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -122,7 +120,6 @@ Geef UITSLUITEND een compacte, door komma's gescheiden lijst van trefwoorden en 
         res = genereer_met_retry(client, model, prompt)
         return res.text.strip()
     except Exception:
-        # Fallback naar originele vraag als het tussenstation faalt
         return originele_vraag
 
 # Session state variabelen
@@ -136,13 +133,13 @@ if "gestopt" not in st.session_state:
     st.session_state.gestopt = False
 
 # ------------------------------------------------------------------------------
-# 3. STREAMLIT INTERFACE
+# 3. STREAMLIT INTERFACE (LAYOUT v3.8.1 STIJL)
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title=f"Archief Zoekmachine {APP_VERSIE}", page_icon="🔍", layout="wide")
 st.title(f"🔍 Archief Zoekmachine ({APP_VERSIE})")
 
 if MODEL_NAAM:
-    st.caption(f"Versie: `{APP_VERSIE}` | Actief AI-model: `{MODEL_NAAM}` | 🧠 Slim taalkundig tussenstation (Query Expansion) geactiveerd")
+    st.caption(f"Versie: `{APP_VERSIE}` | Actief AI-model: `{MODEL_NAAM}` | Vertrouwde v3.8.1 schermlayout met Query Expansion")
 else:
     st.error("Kon geen werkend Gemini-model vinden. Controleer je Gemini API key.")
     st.stop()
@@ -209,7 +206,7 @@ if submit_button:
 
             geselecteerde_doc_ids = []
 
-            # Directe match check op Document_ID of Bestandsnaam in originele óf verrijkte zoekopdracht
+            # Directe match check
             combinatie_zoektekst = f"{onderzoeksvraag} {verrijkte_termen}".lower()
             for row in data:
                 doc_id_val = str(row.get('Document_ID', '')).strip()
@@ -220,7 +217,7 @@ if submit_button:
                     if doc_id_val and doc_id_val not in geselecteerde_doc_ids:
                         geselecteerde_doc_ids.append(doc_id_val)
 
-            # Als er geen expliciete ID-match is, filter via Gemini op de Google Sheet samenvattingen
+            # Filter via Gemini op samenvattingen
             if not geselecteerde_doc_ids:
                 dossier_samenvattingen = {}
                 for row in data:
@@ -428,7 +425,7 @@ INSTRUCTIES VOOR JE RAPPORT:
                 st.error(f"Fout tijdens Gemini analyse: {e}")
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE BRONNEN & RAPPORT
+# 5. WEERGAVE BRONNEN & RAPPORT (v3.8.1 STIJL)
 # ------------------------------------------------------------------------------
 if st.session_state.bron_details:
     st.subheader("📁 Geselecteerde bronnen & Afbeeldingen:")

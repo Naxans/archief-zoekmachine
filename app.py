@@ -2,6 +2,7 @@ import io
 import time
 import logging
 import warnings
+import base64
 import streamlit as st
 from PIL import Image
 import gspread
@@ -14,16 +15,15 @@ from google.genai import types
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v1.2.0
+# Versie: v3.8.1
 # Datum: September 2026
 #
-# UPDATE:
-# - Volledige verwijdering van vastlopende custom CSS overlays.
-# - Gebruik van Streamlit Native Modal (st.dialog) voor 100% stabiliteit.
-# - Geen reboots, geen 30-seconden timeouts of bevroren donkere schermen meer.
+# FEATURE:
+# - Herstel van de originele, strakke, donkere fullscreen overlay (Foto 1).
+# - Directe Base64 afbeelding-rendering om 30s timeouts/crashes te voorkomen.
 # ==============================================================================
 
-APP_VERSIE = "v1.2.0 (2026)"
+APP_VERSIE = "v3.8.1 (2026)"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
@@ -104,6 +104,20 @@ def laad_drive_bestand_payload(drive_service, file_id, mime_type, file_name):
         img.save(img_byte_arr, format='JPEG', quality=85)
         return types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/jpeg')
 
+@st.cache_data(ttl=3600)
+def haal_afbeelding_base64(file_id):
+    """Haalt afbeelding op en converteert naar base64 voor snelle weergave in overlay"""
+    try:
+        request = drive_service.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        return base64.b64encode(fh.getvalue()).decode('utf-8')
+    except Exception:
+        return None
+
 def verrijk_zoekopdracht_met_gemini(client, model, originele_vraag):
     prompt = f"""
 Jij bent een taalkundig en historisch expert gespecialiseerd in Belgische bedrijfs- en archiefstukken.
@@ -137,7 +151,7 @@ if "lightbox_pagina_idx" not in st.session_state:
     st.session_state.lightbox_pagina_idx = 0
 
 # ------------------------------------------------------------------------------
-# 3. INTERFACE STYLING
+# 3. INTERFACE & STYLING (EXACT ZOALS FOTO 1)
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
@@ -166,49 +180,62 @@ st.markdown("""
         overflow: hidden;
         text-overflow: ellipsis;
     }
+
+    /* FULLSCREEN OVERLAY CSS VOOR FOTO 1 WEERGAVE */
+    .v381-overlay-backdrop {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background-color: #121212;
+        z-index: 999990;
+    }
+
+    .v381-overlay-container {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        z-index: 999999;
+        display: flex;
+        flex-direction: column;
+        background-color: #1a1a1a;
+    }
+
+    .v381-top-bar {
+        height: 48px;
+        background-color: #0d0d0d;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 16px;
+        border-bottom: 1px solid #2a2a2a;
+        color: #e0e0e0;
+        font-family: sans-serif;
+        font-size: 14px;
+    }
+
+    .v381-image-area {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        padding: 20px;
+        box-sizing: border-box;
+        overflow: hidden;
+    }
+
+    .v381-image-area img {
+        max-width: 90vw;
+        max-height: 85vh;
+        object-fit: contain;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+    }
 </style>
 """, unsafe_allow_html=True)
-
-# ------------------------------------------------------------------------------
-# NATIVE STABLE LIGHTBOX DIALOG (V3.8.1 FUNCTIONALITEIT ZONDER CRASHES)
-# ------------------------------------------------------------------------------
-@st.dialog("📄 Document Viewer", width="large")
-def toon_lightbox_dialog():
-    dossier = st.session_state.lightbox_dossier
-    bestanden = dossier["bestanden"]
-    totaal_pags = len(bestanden)
-    curr_idx = st.session_state.lightbox_pagina_idx
-    actief_bestand = bestanden[curr_idx]
-
-    b_id = actief_bestand["id"]
-    thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w1600"
-
-    # Header
-    col_titel, col_pag = st.columns([3, 1])
-    with col_titel:
-        st.markdown(f"### {dossier['naam']}")
-    with col_pag:
-        st.markdown(f"**Pagina {curr_idx + 1} van {totaal_pags}**")
-
-    # Afbeelding
-    st.image(thumbnail_url, use_container_width=True)
-
-    # Navigatie Knoppen Onder de Afbeelding (Altijd klikbaar, 100% stabiel)
-    btn_l, btn_mid, btn_r = st.columns([1, 2, 1])
-    with btn_l:
-        if st.button("◀ Vorige pagina", use_container_width=True, disabled=(curr_idx == 0)):
-            st.session_state.lightbox_pagina_idx -= 1
-            st.rerun()
-
-    with btn_r:
-        if st.button("Volgende pagina ▶", use_container_width=True, disabled=(curr_idx == totaal_pags - 1)):
-            st.session_state.lightbox_pagina_idx += 1
-            st.rerun()
-
-    with btn_mid:
-        if st.button("✕ Sluiten", use_container_width=True, type="primary"):
-            st.session_state.lightbox_dossier = None
-            st.rerun()
 
 # ------------------------------------------------------------------------------
 # HOOFDPAGINA - BASIS WEERGAVE
@@ -438,6 +465,52 @@ if st.session_state.chat_historie:
                     except Exception as e:
                         st.error(f"Fout bij verwerken vervolgvraag: {e}")
 
-# TRIGGER VOOR STABELE LIGHTBOX DIALOG
+# ------------------------------------------------------------------------------
+# LIGHTBOX OVERLAY RENDERING (EXACT ZOALS FOTO 1)
+# ------------------------------------------------------------------------------
 if st.session_state.lightbox_dossier:
-    toon_lightbox_dialog()
+    dossier = st.session_state.lightbox_dossier
+    bestanden = dossier["bestanden"]
+    totaal_pags = len(bestanden)
+    curr_idx = st.session_state.lightbox_pagina_idx
+    actief_bestand = bestanden[curr_idx]
+
+    # Haal base64 data op voor directe weergave zonder timeout
+    img_b64 = haal_afbeelding_base64(actief_bestand["id"])
+    img_src = f"data:image/jpeg;base64,{img_b64}" if img_b64 else f"https://drive.google.com/thumbnail?id={actief_bestand['id']}&sz=w1600"
+
+    # Donkere Achtergrond
+    st.markdown('<div class="v381-overlay-backdrop"></div>', unsafe_allow_html=True)
+
+    # Top balk (Zwart met titel en sluitknop)
+    top_col1, top_col2, top_col3 = st.columns([6, 2, 1])
+    with top_col1:
+        st.markdown(f"<span style='color: #fff; font-weight: bold;'>📄 {actief_bestand['bestandsnaam']}</span>", unsafe_allow_html=True)
+    with top_col2:
+        st.markdown(f"<span style='color: #aaa;'>Pagina {curr_idx + 1} van {totaal_pags}</span>", unsafe_allow_html=True)
+    with top_col3:
+        if st.button("✕ Sluiten", key="v381_close_btn", type="primary", use_container_width=True):
+            st.session_state.lightbox_dossier = None
+            st.rerun()
+
+    # Middengebied: Navigatiepijlen + Afbeelding
+    nav_col1, img_col, nav_col2 = st.columns([1, 10, 1])
+
+    with nav_col1:
+        st.markdown("<div style='height: 35vh;'></div>", unsafe_allow_html=True)
+        if st.button("◀", key="v381_prev_btn", use_container_width=True, disabled=(curr_idx == 0)):
+            st.session_state.lightbox_pagina_idx -= 1
+            st.rerun()
+
+    with img_col:
+        st.markdown(f"""
+            <div style="text-align: center; margin-top: 10px;">
+                <img src="{img_src}" style="max-height: 75vh; max-width: 100%; border-radius: 4px; box-shadow: 0 0 20px rgba(0,0,0,0.8);">
+            </div>
+        """, unsafe_allow_html=True)
+
+    with nav_col2:
+        st.markdown("<div style='height: 35vh;'></div>", unsafe_allow_html=True)
+        if st.button("▶", key="v381_next_btn", use_container_width=True, disabled=(curr_idx == totaal_pags - 1)):
+            st.session_state.lightbox_pagina_idx += 1
+            st.rerun()

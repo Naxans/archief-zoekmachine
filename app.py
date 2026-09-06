@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.3.6 (Enhanced Keyword Scoring & Centered Viewer)"
+APP_VERSION = "v1.3.7 (Unique Keyword Multiplier & Exact Matching)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -187,7 +187,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. SLIMME SCORING & STRIKTE SCORE-RANGORDE
+# 4. SLIMME SCORING & UNIEKE TREFWOORDEN VERMENIGVULDIGER
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -246,7 +246,7 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
                                         if t and t not in NEDERLANDSE_STOPWOORDEN and t not in st.session_state.harde_naam_targets]))
             st.session_state.uitgebreide_zoektermen = alle_zoektermen
 
-        with st.spinner("Stap 2/3: Archiefstukken & PDF's matchen op score..."):
+        with st.spinner("Stap 2/3: Archiefstukken & PDF's matchen op unieke trefwoorden..."):
             dossier_scores = {}
 
             for row in data:
@@ -264,8 +264,9 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
                 combi_tekst = f"{doc_id.lower()} {b_naam_norm} {pers} {ond} {inhoud}"
 
                 score = 0
+                unieke_matches = 0  # Telt hoeveel VERSCHILLENDE zoekwoorden voorkomen
 
-                # 1. Ken punten toe aan harde persoonsnamen (indien aanwezig in vraag)
+                # 1. Harde persoonsnamen
                 for ht in st.session_state.harde_naam_targets:
                     if ht in b_naam_norm:
                         score += 500000
@@ -274,15 +275,24 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
                     elif ht in ond or ht in inhoud:
                         score += 10000
 
-                # 2. Ken ALTIJD punten toe aan algemene trefwoorden uit de vraag (zoals 'royal', 'record', 'vedette')
-                for term in st.session_state.uitgebreide_zoektermen:
-                    if len(term) >= 3:
-                        if term in b_naam_norm:
-                            score += 10000  # Hoge bonus voor match direct in de bestandsnaam
-                        if term in combi_tekst:
-                            score += 1000   # Bonus voor match in de Google Sheet metadata
+                # 2. Algemene trefwoorden belonen op uniekheid & positie
+                voorwaarde_termen = [t for t in st.session_state.uitgebreide_zoektermen if len(t) >= 3]
+                
+                for term in voorwaarde_termen:
+                    term_gevonden = False
+                    if term in b_naam_norm:
+                        score += 20000  # Enorme bonus voor match in bestandsnaam
+                        term_gevonden = True
+                    elif term in combi_tekst:
+                        score += 1000   # Match in metadata
+                        term_gevonden = True
+                    
+                    if term_gevonden:
+                        unieke_matches += 1
 
-                if score > 0:
+                # 3. VERMENIGVULDIGER: Hoe meer UNIEKE zoekwoorden, hoe exponentieel hoger de rangorde
+                if unieke_matches > 0:
+                    score = score * (unieke_matches ** 3)
                     dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + score
 
             gesorteerde_dossiers = [d_id for d_id, sc in sorted(dossier_scores.items(), key=lambda x: x[1], reverse=True)]
@@ -585,7 +595,7 @@ if st.session_state.blader_paginas:
     components.html(grid_html, height=(aantal_rijen * 240) + 15, scrolling=False)
 
 # ------------------------------------------------------------------------------
-# 6. HISTORISCHE ANALYSE VIA GEMINI (INCLUSIEF EXPLICIETE NAMEN-ANALYSE)
+# 6. HISTORISCHE ANALYSE VIA GEMINI
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas and not st.session_state.chat_historie:
     with st.spinner("Stap 3/3: Historische analyse genereren..."):

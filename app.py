@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.3.9 (Filename Exact Priority)"
+APP_VERSION = "v1.4.0 (Universal Filename Exact Match)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -73,7 +73,7 @@ NEDERLANDSE_STOPWOORDEN = {
     'wanneer', 'hoe', 'wat', 'wie', 'waar', 'is', 'van', 'de', 'het', 'een', 'en', 'in', 
     'op', 'te', 'dat', 'die', 'met', 'voor', 'zijn', 'was', 'er', 'ze', 'om', 'over', 
     'aan', 'bij', 'naar', 'uit', 'door', 'je', 'hij', 'we', 'ze', 'om', 'of', 'tot',
-    'weet', 'geef', 'zoek', 'over'
+    'weet', 'geef', 'zoek', 'over', 'model'
 }
 
 BEKENDE_NAAM_VARIANTEN = {
@@ -152,7 +152,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: wanneer overleed emile delvoie?',
+        placeholder='Bijv: wat weet je over een royal record radio model vedette?',
         height=100
     )
 with col2:
@@ -187,7 +187,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. SLIMME GEBALANCEERDE SCORING & EXACTE BESTANDSNAAM PRIORITEIT (v1.3.9)
+# 4. UNIVERSELE BESTANDSNAAM SCORING & PRIORITEIT (v1.4.0)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -205,7 +205,7 @@ if st.session_state.start_zoekopdracht:
                 st.session_state.start_zoekopdracht = False
                 st.stop()
 
-        with st.spinner("Stap 1b/3: Persoonsnamen afdwingen en context genereren..."):
+        with st.spinner("Stap 1b/3: Trefwoorden & context-uitbreiding genereren..."):
             vraag_orig = st.session_state.huidige_vraag
             vraag_norm = normaliseer_tekst(vraag_orig)
             woorden_in_vraag = re.sub(r'[^\w\s]', ' ', vraag_norm).split()
@@ -224,7 +224,7 @@ if st.session_state.start_zoekopdracht:
 
             prompt_expansion = f"""
 Jij bent een zoekmachine-expert voor een Belgisch/Nederlands historisch archief.
-Analyseer de onderstaande vraag en genereer een brede lijst met meertalige synoniemen (Nederlands, Frans) en gerelateerde termen (bijv. overlijden, radio, model, catalogus), maar genereer GEEN specifieke persoonsnamen (Emile, Antoine, Rutten etc.).
+Analyseer de onderstaande vraag en genereer een brede lijst met meertalige synoniemen (Nederlands, Frans) en gerelateerde termen (bijv. overlijden, radio, model, catalogus).
 
 GEBRUIKERSVRAAG: "{vraag_orig}"
 
@@ -249,6 +249,12 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
         with st.spinner("Stap 2/3: Archiefstukken & PDF's matchen op unieke trefwoorden..."):
             dossier_scores = {}
 
+            # Verzamel alle harde kernwoorden uit de zoekopdracht zelf (zonder stopwoorden)
+            kernwoorden_vraag = [w for w in re.sub(r'[^\w\s]', ' ', normaliseer_tekst(st.session_state.huidige_vraag)).split() 
+                                 if len(w) >= 3 and w not in NEDERLANDSE_STOPWOORDEN]
+
+            alle_zoektermen = list(set(st.session_state.harde_naam_targets + st.session_state.uitgebreide_zoektermen + kernwoorden_vraag))
+
             for row in data:
                 b_naam = str(row.get('Bestandsnaam', '')).strip()
                 doc_id = str(row.get('Document_ID', '')).strip()
@@ -264,56 +270,45 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
                 combi_tekst = f"{doc_id.lower()} {b_naam_norm} {pers} {ond} {inhoud}"
 
                 score = 0
-                has_naam_in_filename = False
-                has_naam_match = False
+                exact_filename_matches = 0
                 unieke_context_matches = 0
 
-                # 1. Harde persoonsnamencontrole
-                for ht in st.session_state.harde_naam_targets:
-                    # Is de gezochte naam direct aanwezig in de bestandsnaam? (Absolute prioriteit)
-                    if ht in b_naam_norm:
-                        score += 500000
-                        has_naam_in_filename = True
-                        has_naam_match = True
-                    elif ht in pers:
-                        score += 100000
-                        has_naam_match = True
-                    elif ht in ond or ht in inhoud:
-                        score += 30000
-                        has_naam_match = True
-
-                # 2. Algemene trefwoorden en context
-                voorwaarde_termen = [t for t in st.session_state.uitgebreide_zoektermen if len(t) >= 3]
-                
-                for term in voorwaarde_termen:
-                    term_gevonden = False
-                    if term in b_naam_norm:
-                        score += 15000  
-                        term_gevonden = True
-                    elif term in combi_tekst:
-                        score += 1000   
-                        term_gevonden = True
+                # 1. MATCHING OP GEZOCHTE TERMEN EN BESTANDSNAAM PRIORITEIT
+                for term in alle_zoektermen:
+                    if len(term) < 3:
+                        continue
                     
-                    if term_gevonden:
+                    term_in_filename = term in b_naam_norm
+                    term_in_metadata = term in pers or term in ond or term in inhoud
+
+                    if term_in_filename:
+                        # Enorme bonus als de zoekterm (bijv. 'vedette', 'delvoie', 'grandluxe') in de bestandsnaam staat
+                        score += 100000
+                        exact_filename_matches += 1
+
+                    if term_in_metadata:
+                        score += 5000
                         unieke_context_matches += 1
 
-                # 3. MENTALE SCHIFTING & COMBINATIE MULTIPLIER
-                multiplier = 1
-                
-                if st.session_state.harde_naam_targets:
-                    if has_naam_in_filename:
-                        # Extra push voor specifieke bestanden waar de naam in de titel staat
-                        multiplier = 5 + min(unieke_context_matches, 3)
-                    elif has_naam_match:
-                        multiplier = 1 + min(unieke_context_matches, 3)
-                    else:
-                        # Documenten zonder match op de gezochte naam worden zwaar afgestraft
-                        score = score * 0.05
-                else:
-                    multiplier = 1 + min(unieke_context_matches, 4)
+                # 2. CONTROLEER OF HET SPECIFIEKE KERNWOORD AANWEZIG IS
+                heeft_kernwoord_match = any(kw in combi_tekst for kw in kernwoorden_vraag if kw not in {'radio', 'koninklijke'})
+
+                # 3. DYNAMISCHE MULTIPLIER & AFSTRAFFING GENERIEKE DOSSIERS
+                multiplier = 1.0
+
+                if exact_filename_matches > 0:
+                    # Hoe meer zoekwoorden in de bestandsnaam zelf staan, hoe hoger de vermenigvuldiger
+                    multiplier += (exact_filename_matches * 5.0)
+
+                # Als er specifieke kernwoorden in de vraag staan (zoals 'vedette' of 'delvoie'), straf documenten af die deze NIET hebben
+                specifieke_kernwoorden = [kw for kw in kernwoorden_vraag if kw not in {'radio', 'koninklijke'}]
+                if specifieke_kernwoorden:
+                    if not heeft_kernwoord_match:
+                        # Geen match met het specifieke kernwoord? Zware afstraffing (bijv. kranten die toevallig alleen 'radio' herhalen)
+                        score = score * 0.01
 
                 final_score = score * multiplier
-                
+
                 if final_score > 0:
                     dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + final_score
 

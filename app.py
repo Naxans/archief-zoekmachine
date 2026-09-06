@@ -14,17 +14,16 @@ from google.genai import types
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v1.1.8
+# Versie: v1.1.9
 # Datum: September 2026
 #
 # UPDATE:
-# - Exacte 1-op-1 overname van de Fullscreen Lightbox Overlay uit v3.8.1.
-# - Donkere half-transparante achtergrond over de volledige viewport (100vw/100vh).
-# - Witte sluitknop rechtsboven en gecentreerde paginateller.
-# - Navigatieknoppen aan de zijkanten van het document zonder muisblokkades.
+# - Fix voor 'blinde' overlay (donker scherm zonder knoppen/foto).
+# - Verwijderen van st.stop() in lightbox rendering om te zorgen dat de UI
+#   en knoppen gegarandeerd geladen worden.
 # ==============================================================================
 
-APP_VERSIE = "v1.1.8 (2026)"
+APP_VERSIE = "v1.1.9 (2026)"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
@@ -132,14 +131,13 @@ if "verrijkte_termen" not in st.session_state:
 if "laatste_vraag" not in st.session_state:
     st.session_state.laatste_vraag = ""
 
-# Session state voor v3.8.1 Lightbox Overlay
 if "lightbox_dossier" not in st.session_state:
     st.session_state.lightbox_dossier = None
 if "lightbox_pagina_idx" not in st.session_state:
     st.session_state.lightbox_pagina_idx = 0
 
 # ------------------------------------------------------------------------------
-# 3. INTERFACE & V3.8.1 LIGHTBOX CSS
+# 3. INTERFACE & STIELE
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
@@ -169,16 +167,15 @@ st.markdown("""
         text-overflow: ellipsis;
     }
 
-    /* FULLSCREEN OVERLAY CSS UIT V3.8.1 */
+    /* FULLSCREEN OVERLAY CSS */
     .v381-overlay-backdrop {
         position: fixed;
         top: 0;
         left: 0;
         width: 100vw;
         height: 100vh;
-        background-color: rgba(22, 22, 24, 0.94);
+        background-color: rgba(20, 20, 20, 0.95);
         z-index: 999990;
-        pointer-events: none;
     }
 
     .v381-overlay-wrapper {
@@ -193,7 +190,6 @@ st.markdown("""
         box-sizing: border-box;
     }
 
-    /* Witte Sluitknop v3.8.1 */
     div.stButton > button[key="v381_close"] {
         background-color: #ffffff !important;
         color: #111111 !important;
@@ -202,7 +198,6 @@ st.markdown("""
         border: none !important;
     }
 
-    /* Navigatiepijlen v3.8.1 */
     .v381-nav-btn button {
         background-color: #ffffff !important;
         color: #000000 !important;
@@ -217,65 +212,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
-# EXACTE V3.8.1 LIGHTBOX OVERLAY COMPONENT
-# ------------------------------------------------------------------------------
-if st.session_state.lightbox_dossier:
-    dossier = st.session_state.lightbox_dossier
-    bestanden = dossier["bestanden"]
-    totaal_pags = len(bestanden)
-    curr_idx = st.session_state.lightbox_pagina_idx
-    actief_bestand = bestanden[curr_idx]
-
-    b_id = actief_bestand["id"]
-    thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w1600"
-
-    # Achtergrond injecteren
-    st.markdown('<div class="v381-overlay-backdrop"></div>', unsafe_allow_html=True)
-
-    # Inhoudscontainer
-    with st.container():
-        st.markdown('<div class="v381-overlay-wrapper">', unsafe_allow_html=True)
-
-        # Bovenbalk v3.8.1
-        head_c1, head_c2, head_c3 = st.columns([3, 4, 2])
-        with head_c1:
-            st.markdown(f"<p style='color: white; font-size: 15px; font-weight: 600; margin-top: 5px;'>📄 {dossier['naam']}</p>", unsafe_allow_html=True)
-        with head_c2:
-            st.markdown(f"<p style='color: #ccc; text-align: center; font-size: 13px; margin-top: 8px;'>Pagina {curr_idx + 1} van {totaal_pags}</p>", unsafe_allow_html=True)
-        with head_c3:
-            if st.button("✕ Sluiten", key="v381_close", use_container_width=True):
-                st.session_state.lightbox_dossier = None
-                st.rerun()
-
-        st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
-
-        # Middenstuk v3.8.1: Pijl Links - Foto - Pijl Rechts
-        col_l, col_img, col_r = st.columns([0.6, 10, 0.6])
-
-        with col_l:
-            st.markdown("<div style='height: 38vh;'></div>", unsafe_allow_html=True)
-            st.markdown('<div class="v381-nav-btn">', unsafe_allow_html=True)
-            if st.button("◀", key="v381_prev", disabled=(curr_idx == 0)):
-                st.session_state.lightbox_pagina_idx -= 1
-                st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        with col_img:
-            st.image(thumbnail_url, use_container_width=True)
-
-        with col_r:
-            st.markdown("<div style='height: 38vh;'></div>", unsafe_allow_html=True)
-            st.markdown('<div class="v381-nav-btn">', unsafe_allow_html=True)
-            if st.button("▶", key="v381_next", disabled=(curr_idx == totaal_pags - 1)):
-                st.session_state.lightbox_pagina_idx += 1
-                st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        st.markdown('</div>', unsafe_allow_html=True)
-        st.stop()
-
-# ------------------------------------------------------------------------------
-# HOOFDPAGINA
+# HOOFDPAGINA - BASIS WEERGAVE
 # ------------------------------------------------------------------------------
 header_col1, header_col2 = st.columns([4, 1])
 with header_col1:
@@ -471,7 +408,7 @@ if submit_button:
                 st.error(f"Fout tijdens analyse: {e}")
 
 # ------------------------------------------------------------------------------
-# 5. PASSIEVE RENDERING
+# 5. PASSIEVE RENDERING VAN SCHERM EN OVERLAY
 # ------------------------------------------------------------------------------
 if st.session_state.verrijkte_termen and submit_button is False:
     toon_expansion(expansion_placeholder, st.session_state.laatste_vraag, st.session_state.verrijkte_termen)
@@ -501,3 +438,56 @@ if st.session_state.chat_historie:
                         st.session_state.chat_historie.append(("assistant", response.text))
                     except Exception as e:
                         st.error(f"Fout bij verwerken vervolgvraag: {e}")
+
+# ------------------------------------------------------------------------------
+# LIGHTBOX OVERLAY RENDERING (GEEN ST.STOP VOORKOMT BLINDE OVERLAY)
+# ------------------------------------------------------------------------------
+if st.session_state.lightbox_dossier:
+    dossier = st.session_state.lightbox_dossier
+    bestanden = dossier["bestanden"]
+    totaal_pags = len(bestanden)
+    curr_idx = st.session_state.lightbox_pagina_idx
+    actief_bestand = bestanden[curr_idx]
+
+    b_id = actief_bestand["id"]
+    thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w1600"
+
+    st.markdown('<div class="v381-overlay-backdrop"></div>', unsafe_allow_html=True)
+
+    with st.container():
+        st.markdown('<div class="v381-overlay-wrapper">', unsafe_allow_html=True)
+
+        head_c1, head_c2, head_c3 = st.columns([3, 4, 2])
+        with head_c1:
+            st.markdown(f"<p style='color: white; font-size: 15px; font-weight: 600; margin-top: 5px;'>📄 {dossier['naam']}</p>", unsafe_allow_html=True)
+        with head_c2:
+            st.markdown(f"<p style='color: #ccc; text-align: center; font-size: 13px; margin-top: 8px;'>Pagina {curr_idx + 1} van {totaal_pags}</p>", unsafe_allow_html=True)
+        with head_c3:
+            if st.button("✕ Sluiten", key="v381_close", use_container_width=True):
+                st.session_state.lightbox_dossier = None
+                st.rerun()
+
+        st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+
+        col_l, col_img, col_r = st.columns([0.6, 10, 0.6])
+
+        with col_l:
+            st.markdown("<div style='height: 38vh;'></div>", unsafe_allow_html=True)
+            st.markdown('<div class="v381-nav-btn">', unsafe_allow_html=True)
+            if st.button("◀", key="v381_prev", disabled=(curr_idx == 0)):
+                st.session_state.lightbox_pagina_idx -= 1
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with col_img:
+            st.image(thumbnail_url, use_container_width=True)
+
+        with col_r:
+            st.markdown("<div style='height: 38vh;'></div>", unsafe_allow_html=True)
+            st.markdown('<div class="v381-nav-btn">', unsafe_allow_html=True)
+            if st.button("▶", key="v381_next", disabled=(curr_idx == totaal_pags - 1)):
+                st.session_state.lightbox_pagina_idx += 1
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('</div>', unsafe_allow_html=True)

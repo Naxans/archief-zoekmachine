@@ -14,17 +14,16 @@ from google.genai import types
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v1.1.5
+# Versie: v1.1.6
 # Datum: September 2026
 #
 # UPDATE:
-# - Volledig herstel van de Fullscreen Lightbox Overlay uit v3.8.1:
-#   * Zwarte, licht doorschijnende achtergrond over de hele pagina.
-#   * Navigatiepijlen (Vorige/Volgende) direct links en rechts naast de foto.
-#   * Bovenaan duidelijke paginateller en sluitknop.
+# - Fix vastloper overlay: Gebruik van st.dialog (native modal) om vastlopen 
+#   en reboots te voorkomen.
+# - Navigatieknoppen (Vorige / Volgende) en paginateller direct boven de afbeelding.
 # ==============================================================================
 
-APP_VERSIE = "v1.1.5 (2026)"
+APP_VERSIE = "v1.1.6 (2026)"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
@@ -132,14 +131,13 @@ if "verrijkte_termen" not in st.session_state:
 if "laatste_vraag" not in st.session_state:
     st.session_state.laatste_vraag = ""
 
-# Session state voor de Fullscreen Lightbox Overlay
-if "lightbox_dossier" not in st.session_state:
-    st.session_state.lightbox_dossier = None
-if "lightbox_pagina_idx" not in st.session_state:
-    st.session_state.lightbox_pagina_idx = 0
+if "bekijk_dossier" not in st.session_state:
+    st.session_state.bekijk_dossier = None
+if "viewer_pagina_idx" not in st.session_state:
+    st.session_state.viewer_pagina_idx = 0
 
 # ------------------------------------------------------------------------------
-# 3. INTERFACE (v1.1.5)
+# 3. INTERFACE (v1.1.6)
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
@@ -168,85 +166,41 @@ st.markdown("""
         overflow: hidden;
         text-overflow: ellipsis;
     }
-    /* Lightbox Fullscreen CSS Overrides */
-    .lightbox-bg {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100vw;
-        height: 100vh;
-        background-color: rgba(0, 0, 0, 0.88);
-        z-index: 99999;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        padding: 20px;
-    }
-    .lightbox-header {
-        color: white;
-        font-size: 18px;
-        font-weight: bold;
-        margin-bottom: 15px;
-        text-align: center;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
-# LIGHTBOX FULLSCREEN OVERLAY (v3.8.1 STIJL)
+# NATIVE STREAMLIT DIALOG (GEEN CSS BUG OF REBOOT RISICO)
 # ------------------------------------------------------------------------------
-if st.session_state.lightbox_dossier:
-    dossier = st.session_state.lightbox_dossier
-    bestanden = dossier["bestanden"]
+@st.dialog("📄 Archiefdocument Viewer", width="large")
+def open_dossier_dialog(dossier_data):
+    bestanden = dossier_data["bestanden"]
     totaal_pags = len(bestanden)
-    curr_idx = st.session_state.lightbox_pagina_idx
-    actief_bestand = bestanden[curr_idx]
+    current_idx = st.session_state.viewer_pagina_idx
 
+    st.markdown(f"### {dossier_data['naam']}")
+
+    # Navigatiebalk boven de foto
+    nav_col1, nav_col2, nav_col3 = st.columns([1, 2, 1])
+    with nav_col1:
+        if st.button("⬅️ Vorige pagina", key="dlg_prev", disabled=(current_idx == 0), use_container_width=True):
+            st.session_state.viewer_pagina_idx -= 1
+            st.rerun()
+    with nav_col2:
+        st.markdown(f"<p style='text-align: center; font-weight: bold; margin-top: 8px; font-size: 16px;'>Pagina {current_idx + 1} van {totaal_pags}</p>", unsafe_allow_html=True)
+    with nav_col3:
+        if st.button("Volgende pagina ➡️", key="dlg_next", disabled=(current_idx == totaal_pags - 1), use_container_width=True):
+            st.session_state.viewer_pagina_idx += 1
+            st.rerun()
+
+    st.markdown("---")
+    
+    actief_bestand = bestanden[current_idx]
     b_id = actief_bestand["id"]
     thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w1600"
 
-    # Container overlay bovenaan het scherm
-    overlay_container = st.container()
-
-    with overlay_container:
-        st.markdown(f"""
-        <div style="background-color: rgba(15, 15, 15, 0.92); position: fixed; top:0; left:0; width:100vw; height:100vh; z-index: 999999; overflow-y: auto; padding: 25px;">
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Header met sluitknop
-        head_c1, head_c2, head_c3 = st.columns([2, 4, 1])
-        with head_c1:
-            st.markdown(f"<h3 style='color: white; margin:0;'>📄 {dossier['naam']}</h3>", unsafe_allow_html=True)
-        with head_c2:
-            st.markdown(f"<h4 style='color: #ddd; text-align: center; margin:0;'>Pagina {curr_idx + 1} van {totaal_pags}</h4>", unsafe_allow_html=True)
-        with head_c3:
-            if st.button("✖ Sluiten", key="close_lightbox", use_container_width=True):
-                st.session_state.lightbox_dossier = None
-                st.rerun()
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        # Middenstuk: Pijl Links - Foto - Pijl Rechts
-        col_left, col_img, col_right = st.columns([1, 8, 1])
-
-        with col_left:
-            st.markdown("<div style='height: 35vh;'></div>", unsafe_allow_html=True)
-            if st.button("◀", key="prev_pag_btn", disabled=(curr_idx == 0), use_container_width=True):
-                st.session_state.lightbox_pagina_idx -= 1
-                st.rerun()
-
-        with col_img:
-            st.image(thumbnail_url, use_container_width=True)
-
-        with col_right:
-            st.markdown("<div style='height: 35vh;'></div>", unsafe_allow_html=True)
-            if st.button("▶", key="next_pag_btn", disabled=(curr_idx == totaal_pags - 1), use_container_width=True):
-                st.session_state.lightbox_pagina_idx += 1
-                st.rerun()
-
-        st.stop()  # Stop verdere rendering zolang de overlay actief is
+    # Afbeelding weergeven
+    st.image(thumbnail_url, use_container_width=True, caption=actief_bestand["bestandsnaam"])
 
 # ------------------------------------------------------------------------------
 # HOOFDPAGINA
@@ -306,8 +260,8 @@ def toon_documenten_grid(container, bronnen, totaal_pags):
                 """, unsafe_allow_html=True)
                 
                 if st.button("👁️ Bekijk", key=f"btn_view_{idx}", use_container_width=True):
-                    st.session_state.lightbox_dossier = bron
-                    st.session_state.lightbox_pagina_idx = 0
+                    st.session_state.bekijk_dossier = bron
+                    st.session_state.viewer_pagina_idx = 0
                     st.rerun()
 
 # Helper-functie om de query expansion op te bouwen
@@ -445,8 +399,11 @@ if submit_button:
                 st.error(f"Fout tijdens analyse: {e}")
 
 # ------------------------------------------------------------------------------
-# 5. PASSIEVE RENDERING
+# 5. WEERGAVE OVERLAY & PASSIEVE RENDERING
 # ------------------------------------------------------------------------------
+if st.session_state.bekijk_dossier:
+    open_dossier_dialog(st.session_state.bekijk_dossier)
+
 if st.session_state.verrijkte_termen and submit_button is False:
     toon_expansion(expansion_placeholder, st.session_state.laatste_vraag, st.session_state.verrijkte_termen)
 

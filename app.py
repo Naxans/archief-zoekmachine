@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.3.0 (Strict Score Order & Persoonsdifferentiatie Fix)"
+APP_VERSION = "v1.3.1 (Scrollbare Overlay Viewer & Strict Scoring)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -268,7 +268,7 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
                 # Absolute voorkeur voor bestandsnaam matches (bijv. delvoie.pdf)
                 for ht in st.session_state.harde_naam_targets:
                     if ht in b_naam_norm:
-                        score += 500000  # Maximale prioriteit
+                        score += 500000  # Hoge prioriteit
                     if ht in pers:
                         score += 50000
                     elif ht in ond or ht in inhoud:
@@ -347,7 +347,7 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
             st.rerun()
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE VAN DE TEGELS (STRIKT IN SCORE-VOLGORDE)
+# 5. WEERGAVE VAN DE TEGELS (MET SCROLLBARE OVERLAY VIEWER)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas:
     st.divider()
@@ -433,17 +433,17 @@ if st.session_state.blader_paginas:
 
                 const modal = topDoc.createElement('div');
                 modal.id = 'rbc-drive-modal';
-                modal.style.cssText = `position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background-color: rgba(0,0,0,0.92); z-index: 9999999; display: flex; flex-direction: column; font-family: sans-serif; `;
+                modal.style.cssText = `position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background-color: rgba(0,0,0,0.92); z-index: 9999999; display: flex; flex-direction: column; font-family: sans-serif;`;
 
                 modal.innerHTML = `
-                    <div style="height: 56px; background: #141414; display: flex; align-items: center; padding: 0 20px; color: white;">
-                        <button id="rbc-close-btn" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer;">✕</button>
+                    <div style="height: 56px; background: #141414; display: flex; align-items: center; padding: 0 20px; color: white; flex-shrink: 0; z-index: 10;">
+                        <button id="rbc-close-btn" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer; padding: 5px 10px;">✕</button>
                         <div id="rbc-title-info" style="font-size: 15px; margin-left: 15px;">Laden...</div>
                     </div>
-                    <div style="position: relative; flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden;">
-                        <img id="rbc-img" style="max-width: 90%; max-height: 90%; object-fit: contain;" src="" />
-                        <div id="rbc-prev-btn" style="position: absolute; left: 20px; font-size: 40px; color: white; cursor: pointer;">‹</div>
-                        <div id="rbc-next-btn" style="position: absolute; right: 20px; font-size: 40px; color: white; cursor: pointer;">›</div>
+                    <div style="position: relative; flex: 1; display: flex; align-items: flex-start; justify-content: center; overflow-y: auto; padding: 20px 0;">
+                        <img id="rbc-img" style="width: 90%; max-width: 900px; height: auto; display: block; margin: 0 auto; box-shadow: 0 4px 20px rgba(0,0,0,0.5);" src="" />
+                        <div id="rbc-prev-btn" style="position: fixed; left: 20px; top: 50%; transform: translateY(-50%); font-size: 40px; color: white; cursor: pointer; user-select: none; background: rgba(0,0,0,0.4); padding: 10px 15px; border-radius: 50%;">‹</div>
+                        <div id="rbc-next-btn" style="position: fixed; right: 20px; top: 50%; transform: translateY(-50%); font-size: 40px; color: white; cursor: pointer; user-select: none; background: rgba(0,0,0,0.4); padding: 10px 15px; border-radius: 50%;">›</div>
                     </div>
                 `;
 

@@ -14,16 +14,16 @@ from google.genai import types
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v1.1.3
+# Versie: v1.1.4
 # Datum: September 2026
 #
 # UPDATE:
-# - Progressive Rendering / Live UI Updates: Query expansion en documenten 
-#   worden direct op het scherm getoond zodra ze geladen zijn, nog VOORDAT 
-#   Gemini met de AI-analyse begint.
+# - Ingebouwde Pagina Viewer Overlay (st.dialog):
+#   Bij het klikken op een dossiertegel opent een overlay waarin direct kan worden
+#   gebladerd door alle pagina's van het dossier ("Pagina X van Y") met navigatiepijlen.
 # ==============================================================================
 
-APP_VERSIE = "v1.1.3 (2026)"
+APP_VERSIE = "v1.1.4 (2026)"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
@@ -131,8 +131,14 @@ if "verrijkte_termen" not in st.session_state:
 if "laatste_vraag" not in st.session_state:
     st.session_state.laatste_vraag = ""
 
+# Session state voor de Viewer Overlay
+if "bekijk_dossier" not in st.session_state:
+    st.session_state.bekijk_dossier = None
+if "viewer_pagina_idx" not in st.session_state:
+    st.session_state.viewer_pagina_idx = 0
+
 # ------------------------------------------------------------------------------
-# 3. INTERFACE (v1.1.3)
+# 3. INTERFACE (v1.1.4)
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
@@ -144,7 +150,7 @@ st.markdown("""
         padding: 5px;
         text-align: center;
         background-color: #fcfcfc;
-        margin-bottom: 15px;
+        margin-bottom: 5px;
     }
     .doc-card img {
         border-radius: 4px;
@@ -191,10 +197,45 @@ if stop_button:
     st.warning("⚠️ Onderzoek geannuleerd.")
     st.stop()
 
-# Placeholders voor directe live-weergave van onderdelen
+# Placeholders
 expansion_placeholder = st.empty()
 docs_placeholder = st.empty()
 rapport_placeholder = st.empty()
+
+# ------------------------------------------------------------------------------
+# OVERLAY DIALOG (DOCUMENT VIEWER)
+# ------------------------------------------------------------------------------
+@st.dialog("📄 Archiefdocument Viewer", width="large")
+def open_dossier_dialog(dossier_data):
+    st.subheader(dossier_data["naam"])
+    bestanden = dossier_data["bestanden"]
+    totaal_pags = len(bestanden)
+    
+    current_idx = st.session_state.viewer_pagina_idx
+
+    # Navigatiebalk
+    nav_col1, nav_col2, nav_col3 = st.columns([1, 2, 1])
+    with nav_col1:
+        if st.button("⬅️ Vorige", disabled=(current_idx == 0), use_container_width=True):
+            st.session_state.viewer_pagina_idx -= 1
+            st.rerun()
+    with nav_col2:
+        st.markdown(f"<p style='text-align: center; font-weight: bold; margin-top: 8px;'>Pagina {current_idx + 1} van {totaal_pags}</p>", unsafe_allow_html=True)
+    with nav_col3:
+        if st.button("Volgende ➡️", disabled=(current_idx == totaal_pags - 1), use_container_width=True):
+            st.session_state.viewer_pagina_idx += 1
+            st.rerun()
+
+    st.markdown("---")
+    
+    actief_bestand = bestanden[current_idx]
+    b_id = actief_bestand["id"]
+    thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w1200"
+    drive_url = f"https://drive.google.com/file/d/{b_id}/view"
+
+    # Grote afbeelding
+    st.image(thumbnail_url, use_container_width=True, caption=actief_bestand["bestandsnaam"])
+    st.markdown(f"[🔗 Open bestand direct in Google Drive]({drive_url})")
 
 # Helper-functie om documentenraster op te bouwen
 def toon_documenten_grid(container, bronnen, totaal_pags):
@@ -206,20 +247,23 @@ def toon_documenten_grid(container, bronnen, totaal_pags):
         cols = st.columns(6)
         for idx, bron in enumerate(bronnen):
             b_naam = bron["naam"]
-            b_id = bron["id"]
-            drive_url = bron.get("url", f"https://drive.google.com/file/d/{b_id}/view")
+            b_id = bron["eerst_id"]
             thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w400"
 
             col = cols[idx % 6]
             with col:
                 st.markdown(f"""
                     <div class="doc-card">
-                        <a href="{drive_url}" target="_blank">
-                            <img src="{thumbnail_url}" alt="{b_naam}">
-                        </a>
+                        <img src="{thumbnail_url}" alt="{b_naam}">
                         <div class="doc-title">{b_naam}</div>
                     </div>
                 """, unsafe_allow_html=True)
+                
+                # Klikknop voor het openen van de overlay
+                if st.button("👁️ Bekijk", key=f"btn_view_{idx}", use_container_width=True):
+                    st.session_state.bekijk_dossier = bron
+                    st.session_state.viewer_pagina_idx = 0
+                    st.rerun()
 
 # Helper-functie om de query expansion op te bouwen
 def toon_expansion(container, vraag, termen):
@@ -229,7 +273,7 @@ def toon_expansion(container, vraag, termen):
             st.write(f"**Verrijkte trefwoorden & varianten:** {termen}")
 
 # ------------------------------------------------------------------------------
-# 4. ONDERZOEKSLOGICA (MET LIVE UPDATES)
+# 4. ONDERZOEKSLOGICA
 # ------------------------------------------------------------------------------
 if submit_button:
     if not onderzoeksvraag.strip():
@@ -240,11 +284,10 @@ if submit_button:
         st.session_state.totaal_paginas = 0
         st.session_state.laatste_vraag = onderzoeksvraag
 
-        # STAP 1: Query Expansion + Direct Tonen
+        # STAP 1: Query Expansion
         with st.spinner("🧠 Tussenstation: Trefwoorden verzamelen..."):
             st.session_state.verrijkte_termen = verrijk_zoekopdracht_met_gemini(ai_client, MODEL_NAAM, onderzoeksvraag)
             
-        # LIVE UPDATE STAP 1
         toon_expansion(expansion_placeholder, st.session_state.laatste_vraag, st.session_state.verrijkte_termen)
 
         # STAP 2: Inhoudsopgave scannen
@@ -313,39 +356,42 @@ if submit_button:
                 pag_count = info["aantal_paginas"]
                 st.session_state.totaal_paginas += pag_count
 
-                eerste_bestand = info["bestanden"][0]
-                b_naam_schoon = str(eerste_bestand).strip("'\" ")
-                if ":" in b_naam_schoon: b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
-                basis_naam = b_naam_schoon.split('/')[-1]
+                dossier_bestanden_lijst = []
 
-                query = f"name contains '{basis_naam.rsplit('.', 1)[0]}' and trashed = false"
-                res = drive_service.files().list(q=query, fields='files(id, name, mimeType)').execute()
-                bestanden = res.get('files', [])
+                for idx, b_naam in enumerate(info["bestanden"]):
+                    b_naam_schoon = str(b_naam).strip("'\" ")
+                    if ":" in b_naam_schoon: b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
+                    basis_naam = b_naam_schoon.split('/')[-1]
 
-                if bestanden:
-                    f = bestanden[0]
-                    b_id, b_real_naam, mime_type = f['id'], f['name'], f.get('mimeType', '')
+                    query = f"name contains '{basis_naam.rsplit('.', 1)[0]}' and trashed = false"
+                    res = drive_service.files().list(q=query, fields='files(id, name, mimeType)').execute()
+                    bestanden = res.get('files', [])
+
+                    if bestanden:
+                        f = bestanden[0]
+                        b_id, b_real_naam, mime_type = f['id'], f['name'], f.get('mimeType', '')
+                        dossier_bestanden_lijst.append({"id": b_id, "bestandsnaam": b_real_naam})
+
+                        # Alleen de bestanden aan Gemini meegeven
+                        try:
+                            payload_part = laad_drive_bestand_payload(drive_service, b_id, mime_type, b_real_naam)
+                            onderzoeks_payload.append(f"\n--- DOSSIER/DOCUMENT: {doc_id} (Pagina {idx+1}/{pag_count}) ---")
+                            onderzoeks_payload.append(payload_part)
+                        except Exception as ex:
+                            st.write(f"Fout bij inladen {b_real_naam}: {ex}")
+
+                if dossier_bestanden_lijst:
                     weergave_titel = f"{doc_id} ({pag_count} pag.)" if pag_count > 1 else doc_id
-                    
-                    drive_url = f"https://drive.google.com/file/d/{b_id}/view"
-
                     st.session_state.bron_details.append({
                         "naam": weergave_titel,
-                        "id": b_id,
-                        "url": drive_url
+                        "eerst_id": dossier_bestanden_lijst[0]["id"],
+                        "bestanden": dossier_bestanden_lijst
                     })
 
-                    try:
-                        payload_part = laad_drive_bestand_payload(drive_service, b_id, mime_type, b_real_naam)
-                        onderzoeks_payload.append(f"\n--- DOSSIER/DOCUMENT: {doc_id} (Bestand: {b_real_naam}) ---")
-                        onderzoeks_payload.append(payload_part)
-                    except Exception as ex:
-                        st.write(f"Fout bij inladen {b_real_naam}: {ex}")
-
-        # LIVE UPDATE STAP 2: Documentenoverzicht direct tonen zodra ze geladen zijn!
+        # LIVE UPDATE STAP 2
         toon_documenten_grid(docs_placeholder, st.session_state.bron_details, st.session_state.totaal_paginas)
 
-        # STAP 4: Gemini-analyse pas daarna uitvoeren
+        # STAP 4: Gemini-analyse uitvoeren
         with st.spinner("📑 Historisch Onderzoeksrapport genereren met Gemini..."):
             try:
                 st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
@@ -355,8 +401,11 @@ if submit_button:
                 st.error(f"Fout tijdens analyse: {e}")
 
 # ------------------------------------------------------------------------------
-# 5. PASSIEVE HERWEERGAVE BIJ VERVOLGVRAGEN EN PAGE REFRESH
+# 5. WEERGAVE OVERLAY & PASSIEVE RENDERING
 # ------------------------------------------------------------------------------
+if st.session_state.bekijk_dossier:
+    open_dossier_dialog(st.session_state.bekijk_dossier)
+
 if st.session_state.verrijkte_termen and submit_button is False:
     toon_expansion(expansion_placeholder, st.session_state.laatste_vraag, st.session_state.verrijkte_termen)
 

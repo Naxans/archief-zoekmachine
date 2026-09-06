@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.3.5 (Centered Zoom & Pan Fixed)"
+APP_VERSION = "v1.3.6 (Enhanced Keyword Scoring & Centered Viewer)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -72,7 +72,8 @@ SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 NEDERLANDSE_STOPWOORDEN = {
     'wanneer', 'hoe', 'wat', 'wie', 'waar', 'is', 'van', 'de', 'het', 'een', 'en', 'in', 
     'op', 'te', 'dat', 'die', 'met', 'voor', 'zijn', 'was', 'er', 'ze', 'om', 'over', 
-    'aan', 'bij', 'naar', 'uit', 'door', 'je', 'hij', 'we', 'ze', 'om', 'of', 'tot'
+    'aan', 'bij', 'naar', 'uit', 'door', 'je', 'hij', 'we', 'ze', 'om', 'of', 'tot',
+    'weet', 'geef', 'zoek', 'over'
 }
 
 BEKENDE_NAAM_VARIANTEN = {
@@ -151,7 +152,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: wanneer overleed emile delvoie?',
+        placeholder='Bijv: wat weet je over een royal record radio model vedette?',
         height=100
     )
 with col2:
@@ -223,12 +224,12 @@ if st.session_state.start_zoekopdracht:
 
             prompt_expansion = f"""
 Jij bent een zoekmachine-expert voor een Belgisch/Nederlands historisch archief.
-Analyseer de onderstaande vraag en genereer een brede lijst met meertalige synoniemen (Nederlands, Frans) en gerelateerde termen (successie, overlijden, etc.), maar genereer GEEN specifieke persoonsnamen (Emile, Antoine, Rutten etc.).
+Analyseer de onderstaande vraag en genereer een brede lijst met meertalige synoniemen (Nederlands, Frans) en gerelateerde termen (bijv. radio, model, catalogus, specificatie, overlijden), maar genereer GEEN specifieke persoonsnamen (Emile, Antoine, Rutten etc.).
 
 GEBRUIKERSVRAAG: "{vraag_orig}"
 
 Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
-["overlijden", "décès", "sterfdatum", "faire-part", "biografie"]
+["radio", "model", "vedette", "apparaat", "specificatie"]
 """
             uitgebreide_termen = []
             try:
@@ -264,6 +265,7 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
 
                 score = 0
 
+                # 1. Ken punten toe aan harde persoonsnamen (indien aanwezig in vraag)
                 for ht in st.session_state.harde_naam_targets:
                     if ht in b_naam_norm:
                         score += 500000
@@ -272,10 +274,13 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
                     elif ht in ond or ht in inhoud:
                         score += 10000
 
-                if score > 0:
-                    for term in st.session_state.uitgebreide_zoektermen:
+                # 2. Ken ALTIJD punten toe aan algemene trefwoorden uit de vraag (zoals 'royal', 'record', 'vedette')
+                for term in st.session_state.uitgebreide_zoektermen:
+                    if len(term) >= 3:
+                        if term in b_naam_norm:
+                            score += 10000  # Hoge bonus voor match direct in de bestandsnaam
                         if term in combi_tekst:
-                            score += 50
+                            score += 1000   # Bonus voor match in de Google Sheet metadata
 
                 if score > 0:
                     dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + score
@@ -589,12 +594,9 @@ if st.session_state.blader_paginas and not st.session_state.chat_historie:
 Jij bent een historisch archivariseXpert voor een Belgisch archief.
 Analyseer de onderstaande bronteksten en geef een gedetailleerd antwoord op de vraag.
 
-BELANGRIJKE INSTRUCTIE MET BETREKKING TOT PERSONEN:
-- Controleer of er meerdere personen bestaan met de achternaam 'Delvoie' of 'Emile Delvoie'.
-- Maak een duidelijk onderscheid tussen:
-  1. Z.E.H. Paul Emiel / Paul Emile Delvoie (priester / stichter)
-  2. Antoine Marie Armand Émile Delvoie (mijningenieur / directeur)
-- Vermeld voor ELKE gevonden persoon de overlijdensdatum en plaats die in de documenten worden genoemd.
+BELANGRIJKE INSTRUCTIE MET BETREKKING TOT PERSONEN & MODELLEN:
+- Als er specifiek over radio-modellen, apparaten of technische documentatie wordt gevraagd, vat de gevonden specificaties en bouwwijzen zo nauwkeurig mogelijk samen.
+- Als er personen worden genoemd, controleer of er meerdere personen bestaan met dezelfde achternaam en maak een duidelijk onderscheid tussen hen.
 
 GEBRUIKERSVRAAG: {st.session_state.huidige_vraag}
 """

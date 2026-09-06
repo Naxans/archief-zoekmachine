@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v3.8.1"
+APP_VERSION = "v1.2.1 (met Query Expansion)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -114,6 +114,8 @@ if "geselecteerde_doc_ids" not in st.session_state:
     st.session_state.geselecteerde_doc_ids = []
 if "huidige_vraag" not in st.session_state:
     st.session_state.huidige_vraag = ""
+if "uitgebreide_zoektermen" not in st.session_state:
+    st.session_state.uitgebreide_zoektermen = []
 
 # ------------------------------------------------------------------------------
 # 3. STREAMLIT INTERFACE & ZIJBALK
@@ -132,12 +134,12 @@ with st.sidebar:
         st.markdown("""
         * **Klikbare Tegels:** Klik op een fototegel om het document te openen.
         * **Bladeren:** Gebruik **`←`** en **`→`** op je toetsenbord.
-        * **Sluiten:** Druk op **`ESC`**.
+        * **Sluiten:** Druk op **`ESC`** of op de **`✕`** knop.
         """)
 
 col_title, col_ver = st.columns([4, 1])
 with col_title:
-    st.title("🔍 RBC Archief zoekmachine")
+    st.title("🔍 RBC Archief zoekmachine (Query Expansion)")
 with col_ver:
     st.caption(f"**Versie:** `{APP_VERSION}` ({APP_DATE})")
 
@@ -168,6 +170,7 @@ if submit_button:
     st.session_state.chat_historie = []
     st.session_state.actieve_chat = None
     st.session_state.geselecteerde_doc_ids = []
+    st.session_state.uitgebreide_zoektermen = []
     st.session_state.huidige_vraag = onderzoeksvraag
     gc.collect()
 
@@ -184,13 +187,14 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. RANKING EN SCORING (VERBETERT VOOR EXACTE STAATSBLAD-JAARTALLEN)
+# 4. QUERY EXPANSION & SCORING LOGICA (v1.2.1)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
         st.warning("Voer a.u.b. een onderzoeksvraag in.")
         st.session_state.start_zoekopdracht = False
     else:
+        # --- Stap 1a: Inhoudsopgave ophalen ---
         with st.spinner("Stap 1/3: Inhoudsopgave (Google Sheet) scannen..."):
             try:
                 sh = gc_drive.open(SHEET_NAAM)
@@ -207,11 +211,38 @@ if st.session_state.start_zoekopdracht:
                 st.session_state.start_zoekopdracht = False
                 st.stop()
 
-            vraag_norm = normaliseer_tekst(st.session_state.huidige_vraag)
-            
-            # Detecteer jaartallen in de vraag (bijv. 1936)
-            gevonden_jaren = re.findall(r'\b(19\d{2}|20\d{2})\b', vraag_norm)
+        # --- Stap 1b: Query Expansion via Gemini ---
+        with st.spinner("Stap 1b/3: Zoekopdracht uitbreiden (Query Expansion)..."):
+            vraag_orig = st.session_state.huidige_vraag
+            prompt_expansion = f"""
+Jij bent een zoekmachine-expert voor een historisch archief. 
+Analyseer de onderstaande gebruikersvraag en genereer een lijst van 5 tot 10 synoniemen, gerelateerde termen, historische varianten, spellingsvarianten, merknamen of trefwoorden.
 
+GEBRUIKERSVRAAG: "{vraag_orig}"
+
+Geef ALLEEN een JSON-array van strings terug, bijvoorbeeld:
+["term1", "term2", "term3"]
+"""
+            uitgebreide_termen = []
+            try:
+                expansion_res = genereer_met_retry(ai_client, MODEL_NAAM, prompt_expansion)
+                json_match = re.search(r'\[.*\]', expansion_res.text, re.DOTALL)
+                if json_match:
+                    uitgebreide_termen = json.loads(json_match.group(0))
+            except Exception:
+                uitgebreide_termen = []
+
+            # Voeg originele woorden toe aan de zoektermen
+            vraag_norm = normaliseer_tekst(vraag_orig)
+            basis_woorden = [w for w in re.sub(r'[^\w\s]', ' ', vraag_norm).split() if len(w) >= 3]
+            
+            alle_zoektermen = list(set([normaliseer_tekst(t) for t in uitgebreide_termen + basis_woorden if t]))
+            st.session_state.uitgebreide_zoektermen = alle_zoektermen
+
+        # --- Stap 1c: Ranking & Scoring op basis van uitgebreide termen ---
+        with st.spinner("Stap 2/3: Archiefstukken matchen en rangschikken..."):
+            gevonden_jaren = re.findall(r'\b(19\d{2}|20\d{2})\b', vraag_norm)
+            
             is_schade_vraag = any(w in vraag_norm for w in ['schade', 'oorlogsschade', 'vergoeding', 'bedrag', 'uitgekeerd', 'frank', 'frs', 'betaald'])
             is_boek_vraag = any(w in vraag_norm for w in ['boek', 'rutten', 'mathieu', 'delvoie', 'elektriciteitscentrale', 'geschreven'])
             is_radio_vraag = any(w in vraag_norm for w in ['radio', 'model', 'vedette', 'auditorium', 'classic', 'standard', 'grandluxe', 'royal', 'record'])
@@ -234,17 +265,20 @@ if st.session_state.start_zoekopdracht:
 
                 score = 0
 
+                # 1. Matches vanuit Query Expansion
+                for term in st.session_state.uitgebreide_zoektermen:
+                    if term in combi_tekst:
+                        score += 35
+
+                # 2. Specifieke domeinregels
                 if is_bestuur_vraag:
-                    # Basiskenmerken voor staatsbladen/akten
                     if any(w in combi_tekst for w in ['staatsblad', 'moniteur', 'oprichting', 'statuten', 'bijlagen', 'actes', 'balans', 'jaarrekening']):
                         score += 150
                     if any(w in combi_tekst for w in ['bestuur', 'beheerder', 'administrateur', 'benoeming', 'raad', 'vennootschap']):
                         score += 80
-
-                    # Matchen op specifiek jaartal (zoals 1936)
                     for yr in gevonden_jaren:
                         if yr in combi_tekst:
-                            score += 250  # Enorme bonus voor het exacte jaartal in staatsbladen!
+                            score += 250
 
                 elif is_boek_vraag:
                     if 'rutten' in combi_tekst or 'mathieu' in combi_tekst or 'delvoie' in combi_tekst:
@@ -269,28 +303,17 @@ if st.session_state.start_zoekopdracht:
                 elif is_radio_vraag:
                     if b_naam.lower().endswith('.pdf'):
                         score += 50
-
                     modellen = ['vedette', 'auditorium', 'classic', 'standard', 'grandluxe', 'onbekend']
                     gezochte_modellen = [m for m in modellen if m in vraag_norm]
-
                     for m in gezochte_modellen:
                         if m in combi_tekst:
                             score += 200
-
                     if 'royal' in vraag_norm and 'royal' in combi_tekst:
                         score += 50
                     if 'record' in vraag_norm and 'record' in combi_tekst:
                         score += 50
-
                     if 'totaal_16' in b_naam.lower() or 'radiocentrale' in combi_tekst:
                         score -= 150
-
-                else:
-                    stop_woorden = ['geef', 'naam', 'grootte', 'bedrag', 'staat', 'over', 'door', 'van', 'het', 'wat', 'weet', 'je', 'een', 'uit', 'radio', 'model', 'wie', 'waren']
-                    for woord in re.sub(r'[^\w\s]', ' ', vraag_norm).split():
-                        if len(woord) >= 3 and woord not in stop_woorden:
-                            if woord in combi_tekst:
-                                score += 30
 
                 if score > 0:
                     dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + score
@@ -355,11 +378,14 @@ if st.session_state.start_zoekopdracht:
         st.rerun()
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE VAN DE FOTOTEGELS
+# 5. WEERGAVE VAN DE FOTOTEGELS & NATIVE OVERLAY VIEWER (EXACT ZOALS IN v3.8.1)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas:
     st.divider()
     
+    if st.session_state.uitgebreide_zoektermen:
+        st.info(f"💡 **Query Expansion toegepast:** Relevante termen gegenereerd -> `{', '.join(st.session_state.uitgebreide_zoektermen[:8])}`")
+
     dossiers_dict = {}
     for p in st.session_state.blader_paginas:
         d_id = p.get("doc_id", "Dossier_Onbekend")
@@ -575,7 +601,7 @@ if st.session_state.blader_paginas:
 
                 closeBtn.onclick = sluitModal;
                 prevBtn.onclick = () => {{ if (currentIndex > 0) {{ currentIndex--; updateViewer(); }} }};
-                nextBtn.onclick = () => {{ if (currentIndex < dossierPaginas.length - 1) {{ currentIndex--; updateViewer(); }} }};
+                nextBtn.onclick = () => {{ if (currentIndex < dossierPaginas.length - 1) {{ currentIndex++; updateViewer(); }} }};
 
                 topDoc.addEventListener('keydown', keyHandler);
 
@@ -663,7 +689,7 @@ INSTRUCTIES VOOR JE RAPPORT:
                         geüploade_fotos += 1
                         
                         del img; del f_data; del img_byte_arr
-                except Exception as img_err:
+                except Exception:
                     continue
 
             st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
@@ -694,4 +720,4 @@ if st.session_state.chat_historie:
                     st.write(response.text)
                     st.session_state.chat_historie.append(("assistant", response.text))
                 except Exception as e:
-                    st.error(f"Fout bij verwerken vervolgvraag: {e}")
+                    st.error(f"Fout bij beantwoorden van vervolgvraag: {e}")

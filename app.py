@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.3.8 (Balanced Name & Context Scoring)"
+APP_VERSION = "v1.3.9 (Filename Exact Priority)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -187,7 +187,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. SLIMME GEBALANCEERDE SCORING (v1.3.8)
+# 4. SLIMME GEBALANCEERDE SCORING & EXACTE BESTANDSNAAM PRIORITEIT (v1.3.9)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -264,12 +264,18 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
                 combi_tekst = f"{doc_id.lower()} {b_naam_norm} {pers} {ond} {inhoud}"
 
                 score = 0
+                has_naam_in_filename = False
                 has_naam_match = False
                 unieke_context_matches = 0
 
-                # 1. Harde persoonsnamen (Geef zware prioriteit)
+                # 1. Harde persoonsnamencontrole
                 for ht in st.session_state.harde_naam_targets:
-                    if ht in b_naam_norm or ht in pers:
+                    # Is de gezochte naam direct aanwezig in de bestandsnaam? (Absolute prioriteit)
+                    if ht in b_naam_norm:
+                        score += 500000
+                        has_naam_in_filename = True
+                        has_naam_match = True
+                    elif ht in pers:
                         score += 100000
                         has_naam_match = True
                     elif ht in ond or ht in inhoud:
@@ -282,28 +288,28 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
                 for term in voorwaarde_termen:
                     term_gevonden = False
                     if term in b_naam_norm:
-                        score += 15000  # Bonus voor match in bestandsnaam
+                        score += 15000  
                         term_gevonden = True
                     elif term in combi_tekst:
-                        score += 1000   # Match in inhoud/metadata
+                        score += 1000   
                         term_gevonden = True
                     
                     if term_gevonden:
                         unieke_context_matches += 1
 
-                # 3. Slimme Combinatie Multiplier
+                # 3. MENTALE SCHIFTING & COMBINATIE MULTIPLIER
                 multiplier = 1
                 
-                # Als er naar een specifieke persoonsnaam werd gezocht
                 if st.session_state.harde_naam_targets:
-                    if has_naam_match:
-                        # Bekroon documenten met de naam én relevante context (max 3x om inflatie te stoppen)
+                    if has_naam_in_filename:
+                        # Extra push voor specifieke bestanden waar de naam in de titel staat
+                        multiplier = 5 + min(unieke_context_matches, 3)
+                    elif has_naam_match:
                         multiplier = 1 + min(unieke_context_matches, 3)
                     else:
-                        # Geen naam gevonden terwijl er wel een naam werd gezocht? Zwaar afstraffen!
-                        score = score * 0.1
+                        # Documenten zonder match op de gezochte naam worden zwaar afgestraft
+                        score = score * 0.05
                 else:
-                    # Geen specifieke persoonsnaam in de vraag? Gebruik gecontroleerde context multiplier (max 4x)
                     multiplier = 1 + min(unieke_context_matches, 4)
 
                 final_score = score * multiplier

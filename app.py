@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.3.4 (Interactive Zoom & Pan Image Viewer)"
+APP_VERSION = "v1.3.5 (Centered Zoom & Pan Fixed)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -343,7 +343,7 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
             st.rerun()
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE VAN DE TEGELS (ZOOM & PAN VIEWER VOOR FOTO'S, GOOGLE DRIVE VOOR PDF)
+# 5. WEERGAVE VAN DE TEGELS (CENTERED ZOOM & PAN VIEWER)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas:
     st.divider()
@@ -470,8 +470,7 @@ if st.session_state.blader_paginas:
                 function setupPanAndZoom(container, img) {
                     container.onwheel = function(e) {
                         e.preventDefault();
-                        const xs = (e.clientX - pointX) / scale;
-                        const ys = (e.clientY - pointY) / scale;
+                        const oldScale = scale;
                         
                         const delta = -e.deltaY;
                         if (delta > 0) {
@@ -483,8 +482,10 @@ if st.session_state.blader_paginas:
                         // Grenzen aan zoomen
                         scale = Math.min(Math.max(0.8, scale), 8);
 
-                        pointX = e.clientX - xs * scale;
-                        pointY = e.clientY - ys * scale;
+                        // Behoud het middelpunt tijdens zoomen
+                        const factor = scale / oldScale;
+                        pointX *= factor;
+                        pointY *= factor;
 
                         applyTransform();
                     };
@@ -533,9 +534,9 @@ if st.session_state.blader_paginas:
                     } else {
                         zoomControls.style.display = 'flex';
                         container.innerHTML = `
-                            <div id="rbc-img-wrapper" style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
+                            <div id="rbc-img-wrapper" style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden;">
                                 <img id="rbc-img" 
-                                     style="max-width: 95vw; max-height: 90vh; object-fit: contain; transition: transform 0.05s ease-out; transform-origin: 0 0; box-shadow: 0 4px 25px rgba(0,0,0,0.6);" 
+                                     style="max-width: 95vw; max-height: 90vh; object-fit: contain; transform-origin: center center; box-shadow: 0 4px 25px rgba(0,0,0,0.6);" 
                                      src="$${getImageUrl(item.id)}" 
                                      onerror="this.onerror=null; this.src='$${getFallbackUrl(item.id)}';" />
                             </div>

@@ -14,16 +14,17 @@ from google.genai import types
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v1.1.7
+# Versie: v1.1.8
 # Datum: September 2026
 #
 # UPDATE:
-# - Exact Google Drive Preview-ontwerp met donkere/doorschijnende overlay.
-# - Navigatiepijlen zweven direct links en rechts op de foto.
-# - 100% stabiele Streamlit-interactie zonder vastlopers of reboots.
+# - Exacte 1-op-1 overname van de Fullscreen Lightbox Overlay uit v3.8.1.
+# - Donkere half-transparante achtergrond over de volledige viewport (100vw/100vh).
+# - Witte sluitknop rechtsboven en gecentreerde paginateller.
+# - Navigatieknoppen aan de zijkanten van het document zonder muisblokkades.
 # ==============================================================================
 
-APP_VERSIE = "v1.1.7 (2026)"
+APP_VERSIE = "v1.1.8 (2026)"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
@@ -131,13 +132,14 @@ if "verrijkte_termen" not in st.session_state:
 if "laatste_vraag" not in st.session_state:
     st.session_state.laatste_vraag = ""
 
-if "bekijk_dossier" not in st.session_state:
-    st.session_state.bekijk_dossier = None
-if "viewer_pagina_idx" not in st.session_state:
-    st.session_state.viewer_pagina_idx = 0
+# Session state voor v3.8.1 Lightbox Overlay
+if "lightbox_dossier" not in st.session_state:
+    st.session_state.lightbox_dossier = None
+if "lightbox_pagina_idx" not in st.session_state:
+    st.session_state.lightbox_pagina_idx = 0
 
 # ------------------------------------------------------------------------------
-# 3. INTERFACE & FULLSCREEN DRIVE STYLING
+# 3. INTERFACE & V3.8.1 LIGHTBOX CSS
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
@@ -167,89 +169,110 @@ st.markdown("""
         text-overflow: ellipsis;
     }
 
-    /* GOOGLE DRIVE FULLSCREEN OVERLAY STYLING OVERRIDE */
-    div[data-testid="stDialog"] > div {
-        background-color: rgba(18, 18, 18, 0.92) !important;
+    /* FULLSCREEN OVERLAY CSS UIT V3.8.1 */
+    .v381-overlay-backdrop {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background-color: rgba(22, 22, 24, 0.94);
+        z-index: 999990;
+        pointer-events: none;
+    }
+
+    .v381-overlay-wrapper {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        z-index: 999999;
+        overflow-y: auto;
+        padding: 15px 25px;
+        box-sizing: border-box;
+    }
+
+    /* Witte Sluitknop v3.8.1 */
+    div.stButton > button[key="v381_close"] {
+        background-color: #ffffff !important;
+        color: #111111 !important;
+        font-weight: 600 !important;
+        border-radius: 6px !important;
         border: none !important;
-        max-width: 98vw !important;
-        width: 98vw !important;
-        height: 94vh !important;
-        margin: 0 auto !important;
-        border-radius: 12px !important;
-        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.7) !important;
     }
 
-    div[data-testid="stDialog"] header {
-        display: none !important;
-    }
-
-    .drive-nav-btn button {
-        background-color: rgba(255, 255, 255, 0.15) !important;
-        color: white !important;
-        border: 1px solid rgba(255, 255, 255, 0.3) !important;
-        border-radius: 50% !important;
-        width: 55px !important;
-        height: 55px !important;
-        font-size: 22px !important;
-        line-height: 1 !important;
-        transition: all 0.2s ease;
-    }
-
-    .drive-nav-btn button:hover {
-        background-color: rgba(255, 255, 255, 0.35) !important;
-        border-color: #fff !important;
-        transform: scale(1.08);
+    /* Navigatiepijlen v3.8.1 */
+    .v381-nav-btn button {
+        background-color: #ffffff !important;
+        color: #000000 !important;
+        border-radius: 4px !important;
+        font-size: 18px !important;
+        font-weight: bold !important;
+        border: none !important;
+        height: 45px !important;
+        width: 40px !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
-# GOOGLE DRIVE LIGHTBOX VIEWER
+# EXACTE V3.8.1 LIGHTBOX OVERLAY COMPONENT
 # ------------------------------------------------------------------------------
-@st.dialog("Drive Viewer", width="large")
-def open_drive_lightbox(dossier_data):
-    bestanden = dossier_data["bestanden"]
+if st.session_state.lightbox_dossier:
+    dossier = st.session_state.lightbox_dossier
+    bestanden = dossier["bestanden"]
     totaal_pags = len(bestanden)
-    current_idx = st.session_state.viewer_pagina_idx
+    curr_idx = st.session_state.lightbox_pagina_idx
+    actief_bestand = bestanden[curr_idx]
 
-    # Google Drive Stijl Bovenbalk (Titel, Paginateller & Sluiten)
-    top_c1, top_c2, top_c3 = st.columns([4, 2, 1])
-    with top_c1:
-        st.markdown(f"<span style='color: #eee; font-size: 16px; font-weight: 500;'>📄 {dossier_data['naam']}</span>", unsafe_allow_html=True)
-    with top_c2:
-        st.markdown(f"<span style='color: #aaa; font-size: 14px;'>Pagina {current_idx + 1} van {totaal_pags}</span>", unsafe_allow_html=True)
-    with top_c3:
-        if st.button("✕ Sluiten", key="close_drive_modal", use_container_width=True):
-            st.session_state.bekijk_dossier = None
-            st.rerun()
-
-    st.markdown("<hr style='margin: 8px 0 15px 0; border-color: #333;'>", unsafe_allow_html=True)
-
-    # Middenstuk: Linkerpijl - Grote Afbeelding - Rechterpijl
-    pijl_l, img_col, pijl_r = st.columns([1, 10, 1])
-
-    actief_bestand = bestanden[current_idx]
     b_id = actief_bestand["id"]
     thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w1600"
 
-    with pijl_l:
-        st.markdown("<div style='height: 30vh;'></div>", unsafe_allow_html=True)
-        st.markdown('<div class="drive-nav-btn">', unsafe_allow_html=True)
-        if st.button("◀", key="drive_prev", disabled=(current_idx == 0)):
-            st.session_state.viewer_pagina_idx -= 1
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
+    # Achtergrond injecteren
+    st.markdown('<div class="v381-overlay-backdrop"></div>', unsafe_allow_html=True)
 
-    with img_col:
-        st.image(thumbnail_url, use_container_width=True)
+    # Inhoudscontainer
+    with st.container():
+        st.markdown('<div class="v381-overlay-wrapper">', unsafe_allow_html=True)
 
-    with pijl_r:
-        st.markdown("<div style='height: 30vh;'></div>", unsafe_allow_html=True)
-        st.markdown('<div class="drive-nav-btn">', unsafe_allow_html=True)
-        if st.button("▶", key="drive_next", disabled=(current_idx == totaal_pags - 1)):
-            st.session_state.viewer_pagina_idx += 1
-            st.rerun()
+        # Bovenbalk v3.8.1
+        head_c1, head_c2, head_c3 = st.columns([3, 4, 2])
+        with head_c1:
+            st.markdown(f"<p style='color: white; font-size: 15px; font-weight: 600; margin-top: 5px;'>📄 {dossier['naam']}</p>", unsafe_allow_html=True)
+        with head_c2:
+            st.markdown(f"<p style='color: #ccc; text-align: center; font-size: 13px; margin-top: 8px;'>Pagina {curr_idx + 1} van {totaal_pags}</p>", unsafe_allow_html=True)
+        with head_c3:
+            if st.button("✕ Sluiten", key="v381_close", use_container_width=True):
+                st.session_state.lightbox_dossier = None
+                st.rerun()
+
+        st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+
+        # Middenstuk v3.8.1: Pijl Links - Foto - Pijl Rechts
+        col_l, col_img, col_r = st.columns([0.6, 10, 0.6])
+
+        with col_l:
+            st.markdown("<div style='height: 38vh;'></div>", unsafe_allow_html=True)
+            st.markdown('<div class="v381-nav-btn">', unsafe_allow_html=True)
+            if st.button("◀", key="v381_prev", disabled=(curr_idx == 0)):
+                st.session_state.lightbox_pagina_idx -= 1
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with col_img:
+            st.image(thumbnail_url, use_container_width=True)
+
+        with col_r:
+            st.markdown("<div style='height: 38vh;'></div>", unsafe_allow_html=True)
+            st.markdown('<div class="v381-nav-btn">', unsafe_allow_html=True)
+            if st.button("▶", key="v381_next", disabled=(curr_idx == totaal_pags - 1)):
+                st.session_state.lightbox_pagina_idx += 1
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
         st.markdown('</div>', unsafe_allow_html=True)
+        st.stop()
 
 # ------------------------------------------------------------------------------
 # HOOFDPAGINA
@@ -309,8 +332,8 @@ def toon_documenten_grid(container, bronnen, totaal_pags):
                 """, unsafe_allow_html=True)
                 
                 if st.button("👁️ Bekijk", key=f"btn_view_{idx}", use_container_width=True):
-                    st.session_state.bekijk_dossier = bron
-                    st.session_state.viewer_pagina_idx = 0
+                    st.session_state.lightbox_dossier = bron
+                    st.session_state.lightbox_pagina_idx = 0
                     st.rerun()
 
 # Helper-functie om de query expansion op te bouwen
@@ -448,11 +471,8 @@ if submit_button:
                 st.error(f"Fout tijdens analyse: {e}")
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE OVERLAY & PASSIEVE RENDERING
+# 5. PASSIEVE RENDERING
 # ------------------------------------------------------------------------------
-if st.session_state.bekijk_dossier:
-    open_drive_lightbox(st.session_state.bekijk_dossier)
-
 if st.session_state.verrijkte_termen and submit_button is False:
     toon_expansion(expansion_placeholder, st.session_state.laatste_vraag, st.session_state.verrijkte_termen)
 

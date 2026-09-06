@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.2.6 (Rijke Expansion & Harde Bestandsnaam Matching)"
+APP_VERSION = "v1.2.7 (Harde Naam Match & Neutrale Context Scoring)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -68,10 +68,23 @@ except Exception as e:
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
+# STOPWOORDEN LIJST - Deze woorden krijgen score 0
 NEDERLANDSE_STOPWOORDEN = {
     'wanneer', 'hoe', 'wat', 'wie', 'waar', 'is', 'van', 'de', 'het', 'een', 'en', 'in', 
     'op', 'te', 'dat', 'die', 'met', 'voor', 'zijn', 'was', 'er', 'ze', 'om', 'over', 
     'aan', 'bij', 'naar', 'uit', 'door', 'je', 'hij', 'we', 'ze', 'om', 'of', 'tot'
+}
+
+# NAAM VARIANTEN LIJST - Varianten die we neutraal willen scoren als ze in de vraag staan
+# (Dit is ter ondersteuning van de harde match, niet ter vervanging)
+BEKENDE_NAAM_VARIANTEN = {
+    'emile': 'emile',
+    'emiel': 'emiel',
+    'paul': 'paul',
+    'antoine': 'antoine',
+    'mathieu': 'mathieu',
+    'rutten': 'rutten',
+    'delvoie': 'delvoie'
 }
 
 def bepaal_werkend_model(client):
@@ -99,7 +112,7 @@ def genereer_met_retry(client, model, contents, max_retries=4):
                     time.sleep(wachttijd)
                     continue
                 else:
-                    st.error("⚠️ De limiet voor de Gemini API is tijdelijk bereikt. Wacht 1-2 minuten.")
+                    st.error("⚠️ De limiet voor de Gemini API is bereikt. Wacht 1-2 minuten.")
             raise e
 
 # Session state variabelen
@@ -119,9 +132,11 @@ if "huidige_vraag" not in st.session_state:
     st.session_state.huidige_vraag = ""
 if "uitgebreide_zoektermen" not in st.session_state:
     st.session_state.uitgebreide_zoektermen = []
+if "harde_naam_targets" not in st.session_state:
+    st.session_state.harde_naam_targets = []
 
 # ------------------------------------------------------------------------------
-# 3. STREAMLIT INTERFACE
+# 3. STREAMLIT INTERFACE & ZIJBALK
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
@@ -156,6 +171,7 @@ if submit_button:
     st.session_state.actieve_chat = None
     st.session_state.geselecteerde_doc_ids = []
     st.session_state.uitgebreide_zoektermen = []
+    st.session_state.harde_naam_targets = []
     st.session_state.huidige_vraag = onderzoeksvraag
     gc.collect()
 
@@ -172,7 +188,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. SLIMME SCORING & UITGEBREIDE QUERY EXPANSION
+# 4. SLIMME SCORING & HARDE NAAM-MATCHING (v1.2.7)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -191,22 +207,35 @@ if st.session_state.start_zoekopdracht:
                 st.session_state.start_zoekopdracht = False
                 st.stop()
 
-        # --- Stap 1b: Uitgebreide Query Expansion (Nederlands + Frans + Varianten) ---
-        with st.spinner("Stap 1b/3: Trefwoorden en naamvarianten genereren..."):
+        # --- Stap 1b: HARDE NAAM-EXTRACTION & Context Expansion ---
+        with st.spinner("Stap 1b/3: Persoonsnamen afdwingen en context genereren..."):
             vraag_orig = st.session_state.huidige_vraag
+            vraag_norm = normaliseer_tekst(vraag_orig)
+            woorden_in_vraag = re.sub(r'[^\w\s]', ' ', vraag_norm).split()
+            
+            # 1. HARDE MATCH TARGETS: Haal namen direct uit de vraag die we herkennen
+            harde_targets = []
+            for w in woorden_in_vraag:
+                if len(w) >= 3 and w in BEKENDE_NAAM_VARIANTEN:
+                    harde_targets.append(BEKENDE_NAAM_VARIANTEN[w])
+            
+            # Als de vraag 'emile delvoie' bevat, dwingen we ook de spelling 'emiel delvoie' af
+            if 'emile' in harde_targets and 'delvoie' in harde_targets and 'emiel' not in harde_targets:
+                harde_targets.append('emiel')
+            elif 'emiel' in harde_targets and 'delvoie' in harde_targets and 'emile' not in harde_targets:
+                harde_targets.append('emile')
+
+            st.session_state.harde_naam_targets = list(set(harde_targets))
+
+            # 2. CONTEXT EXPANSION (Meertalige synoniemen, maar geen persoonsnamen)
             prompt_expansion = f"""
 Jij bent een zoekmachine-expert voor een Belgisch/Nederlands historisch archief.
-Analyseer de onderstaande vraag en genereer een brede, rijke lijst met trefwoorden, synoniemen, meertalige varianten (Nederlands én Frans) en naamvarianten.
-
-Voorbeelden per categorie:
-- Naamvarianten: Emile Delvoie, Emiel Delvoie, E. Delvoie, Delvoie Emile
-- Overlijden: overlijden, overleden, sterfdatum, sterfjaar, overlijdensakte, in memoriam, necrologie, burgerlijke stand, testament, erfenis
-- Franse termen: décès, mort, décédé, état civil, faire-part, succession
+Analyseer de onderstaande vraag en genereer een brede lijst met meertalige synoniemen (Nederlands, Frans) en gerelateerde termen (successie, overlijden, etc.), maar genereer GEEN specifieke persoonsnamen (Emile, Antoine, Rutten etc.).
 
 GEBRUIKERSVRAAG: "{vraag_orig}"
 
 Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
-["Emile Delvoie", "Emiel Delvoie", "décès", "overlijden", "in memoriam"]
+["overlijden", "décès", "sterfdatum", "faire-part", "biografie"]
 """
             uitgebreide_termen = []
             try:
@@ -217,14 +246,15 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
             except Exception:
                 uitgebreide_termen = []
 
-            vraag_norm = normaliseer_tekst(vraag_orig)
-            basis_woorden = [w for w in re.sub(r'[^\w\s]', ' ', vraag_norm).split() if len(w) >= 3 and w not in NEDERLANDSE_STOPWOORDEN]
+            basis_woorden_groot = [w for w in woorden_in_vraag if len(w) >= 3 and w not in NEDERLANDSE_STOPWOORDEN]
             
-            alle_zoektermen = list(set([normaliseer_tekst(t) for t in uitgebreide_termen + basis_woorden if t]))
+            # Context termen: expansion + basiswoorden, maar ZONDER stopwoorden en harde persoonsnamen
+            alle_zoektermen = list(set([normaliseer_tekst(t) for t in uitgebreide_termen + basis_woorden_groot 
+                                        if t and t not in NEDERLANDSE_STOPWOORDEN and t not in st.session_state.harde_naam_targets]))
             st.session_state.uitgebreide_zoektermen = alle_zoektermen
 
-        # --- Stap 1c: Prioriteit-Scoring & Matching ---
-        with st.spinner("Stap 2/3: Archiefstukken & PDF's matchen..."):
+        # --- Stap 1c: Prioriteit-Scoring & Neutrale Context Matching ---
+        with st.spinner("Stap 2/3: Archiefstukken & PDF's matchen (Harde Naam Match)..."):
             dossier_scores = {}
 
             for row in data:
@@ -233,6 +263,7 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
                 if not doc_id:
                     doc_id = f"SINGLE_{b_naam}"
 
+                # Metadata ophalen en normaliseren
                 pers = normaliseer_tekst(row.get('Genoemde Personen') or row.get('Genoemde personen') or '')
                 ond = normaliseer_tekst(row.get('Onderwerp (NL)') or row.get('Onderwerp') or '')
                 inhoud = normaliseer_tekst(row.get('Inhoud & Cijfers (NL)') or row.get('Inhoud & cijfers') or row.get('Inhoud') or '')
@@ -242,26 +273,27 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
 
                 score = 0
 
-                # A. HARDE MATCH OP BESTANDSNAAM (bijv. delvoie.pdf)
-                for bw in basis_woorden:
-                    if bw in b_naam_norm:
-                        score += 500  # Gegarandeerde top-score als de naam in de bestandsnaam staat
+                # I. HARDE MATCH OP PERSOONSNAAM (Extreme prioriteit - 5000 punten per match)
+                # We checken of de herkende persoonsnamen in de Sheet metadata staan.
+                # Dit dwingt Emile Delvoie scannen boven generieke scannen.
+                for ht in st.session_state.harde_naam_targets:
+                    # Match in Genoemde Personen is het sterkst
+                    if ht in pers:
+                        score += 5000 
+                    # Match ergens anders (Onderwerp/Inhoud) is ook sterk
+                    elif ht in ond or ht in inhoud:
+                        score += 2000
 
-                # B. Match op genoemde personen
-                for bw in basis_woorden:
-                    if bw in pers:
-                        score += 150
-                    elif bw in combi_tekst:
-                        score += 40
+                # II. Match op de volledige bestandsnaam (voor SINGLE_site...delvoie.pdf)
+                for kn in harde_targets:
+                    if kn in b_naam_norm and b_naam_norm.endswith('.pdf'):
+                        score += 5000 # Gegarandeerde top-score voor de PDF als de naam in de bestandsnaam staat
 
-                # C. Uitgebreide termen (Query Expansion)
-                for term in st.session_state.uitgebreide_zoektermen:
-                    if term in combi_tekst:
-                        score += 25
-
-                # D. Extra bonus voor losse PDF's die inhoudelijk matchen
-                if score > 0 and b_naam_norm.endswith('.pdf'):
-                    score += 100
+                # III. Neutrale Context Scoring (Telt alleen mee als naam matches er zijn)
+                if score > 0:
+                    for term in st.session_state.uitgebreide_zoektermen:
+                        if term in combi_tekst:
+                            score += 50 # Context versterkt de ranking, maar vervangt namen niet
 
                 if score > 0:
                     dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + score
@@ -334,8 +366,12 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
 if st.session_state.blader_paginas:
     st.divider()
     
-    if st.session_state.uitgebreide_zoektermen:
-        st.info(f"💡 **Query Expansion toegepast:** `{', '.join(st.session_state.uitgebreide_zoektermen[:15])}`")
+    with st.expander("💡 Bekijk de door Gemini verrijkte context-zoektermen (Query Expansion)"):
+        st.markdown(f"**Originele vraag:** `{vraag_orig}`")
+        if st.session_state.harde_naam_targets:
+            st.markdown(f"**Hardcoded persoonsnamen:** `{', '.join(st.session_state.harde_naam_targets)}`")
+        if st.session_state.uitgebreide_zoektermen:
+            st.markdown(f"**Verrijkte context-trefwoorden & Franse termen:** `{', '.join(st.session_state.uitgebreide_zoektermen)}`")
 
     dossiers_dict = {}
     for p in st.session_state.blader_paginas:
@@ -389,6 +425,7 @@ if st.session_state.blader_paginas:
 
             function renderTiles() {{
                 const grid = document.getElementById('tile-grid');
+                grid.innerHTML = '';
                 tegels.forEach((item) => {{
                     const tile = document.createElement('div');
                     tile.className = 'tile';
@@ -408,7 +445,7 @@ if st.session_state.blader_paginas:
                 const dossierPaginas = alleDossiers[docId] || [];
                 let currentIndex = 0;
 
-                const modal = topDoc.createElement('div');
+                constmodal = topDoc.createElement('div');
                 modal.id = 'rbc-drive-modal';
                 modal.style.cssText = `position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background-color: rgba(0,0,0,0.92); z-index: 9999999; display: flex; flex-direction: column; font-family: sans-serif; `;
 
@@ -456,7 +493,7 @@ if st.session_state.blader_paginas:
 # 6. HISTORISCHE ANALYSE VIA GEMINI
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas and not st.session_state.chat_historie:
-    with st.spinner("Stap 3/3: Rapport genereren..."):
+    with st.spinner("Stap 3/3: Historische analyse genereren..."):
         try:
             onderzoeks_prompt = f"""
 Jij bent een archivariseXpert. Beantwoord de vraag grondig aan de hand van de onderstaande documenten.
@@ -476,7 +513,7 @@ VRAAG: {st.session_state.huidige_vraag}
             gc.collect()
             st.rerun()
         except Exception as e:
-            st.error(f"Fout bij verwerking: {e}")
+            st.error(f"Fout bij historische analyse: {e}")
 
 if st.session_state.chat_historie:
     st.divider()

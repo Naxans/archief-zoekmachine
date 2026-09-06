@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.2.9 (Harde Bestandsnaam Match & SINGLE-ID Fix)"
+APP_VERSION = "v1.3.0 (Strict Score Order & Persoonsdifferentiatie Fix)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -187,7 +187,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. SLIMME SCORING & HARDE NAAM-MATCHING (v1.2.9)
+# 4. SLIMME SCORING & STRIKTE SCORE-RANGORDE
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -246,14 +246,13 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
                                         if t and t not in NEDERLANDSE_STOPWOORDEN and t not in st.session_state.harde_naam_targets]))
             st.session_state.uitgebreide_zoektermen = alle_zoektermen
 
-        with st.spinner("Stap 2/3: Archiefstukken & PDF's matchen (Harde Naam Match)..."):
+        with st.spinner("Stap 2/3: Archiefstukken & PDF's matchen op score..."):
             dossier_scores = {}
 
             for row in data:
                 b_naam = str(row.get('Bestandsnaam', '')).strip()
                 doc_id = str(row.get('Document_ID', '')).strip()
                 
-                # Als Document_ID leeg is, maak een unieke ID aan op basis van de bestandsnaam
                 if not doc_id:
                     doc_id = f"SINGLE_{b_naam}"
 
@@ -266,16 +265,16 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
 
                 score = 0
 
-                # I. ABSOLUTE BOOST: Match op persoonsnamen
+                # Absolute voorkeur voor bestandsnaam matches (bijv. delvoie.pdf)
                 for ht in st.session_state.harde_naam_targets:
                     if ht in b_naam_norm:
-                        score += 100000  # Extreme prioriteit als de naam in het bestand zelf staat (zoals bij de PDF)
+                        score += 500000  # Maximale prioriteit
                     if ht in pers:
                         score += 50000
                     elif ht in ond or ht in inhoud:
                         score += 10000
 
-                # II. Context versterking
+                # Context versterking
                 if score > 0:
                     for term in st.session_state.uitgebreide_zoektermen:
                         if term in combi_tekst:
@@ -284,6 +283,7 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
                 if score > 0:
                     dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + score
 
+            # Sorteer strikt aflopend op score
             gesorteerde_dossiers = [d_id for d_id, sc in sorted(dossier_scores.items(), key=lambda x: x[1], reverse=True)]
 
             if not gesorteerde_dossiers:
@@ -347,7 +347,7 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
             st.rerun()
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE VAN DE TEGELS
+# 5. WEERGAVE VAN DE TEGELS (STRIKT IN SCORE-VOLGORDE)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas:
     st.divider()
@@ -370,7 +370,7 @@ if st.session_state.blader_paginas:
         dossiers_dict[d_id].sort(key=natuurlijke_sortering)
 
     tegel_items = []
-    volgorde_ids = st.session_state.geselecteerde_doc_ids if st.session_state.geselecteerde_doc_ids else list(dossiers_dict.keys())
+    volgorde_ids = st.session_state.geselecteerde_doc_ids
 
     for d_id in volgorde_ids:
         if d_id in dossiers_dict and dossiers_dict[d_id]:
@@ -476,19 +476,28 @@ if st.session_state.blader_paginas:
     components.html(grid_html, height=(aantal_rijen * 240) + 15, scrolling=False)
 
 # ------------------------------------------------------------------------------
-# 6. HISTORISCHE ANALYSE VIA GEMINI
+# 6. HISTORISCHE ANALYSE VIA GEMINI (INCLUSIEF EXPLICIETE NAMEN-ANALYSE)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas and not st.session_state.chat_historie:
     with st.spinner("Stap 3/3: Historische analyse genereren..."):
         try:
             onderzoeks_prompt = f"""
-Jij bent een archivariseXpert. Beantwoord de vraag grondig aan de hand van de onderstaande documenten.
-VRAAG: {st.session_state.huidige_vraag}
+Jij bent een historisch archivariseXpert voor een Belgisch archief.
+Analyseer de onderstaande bronteksten en geef een gedetailleerd antwoord op de vraag.
+
+BELANGRIJKE INSTRUCTIE MET BETREKKING TOT PERSONEN:
+- Controleer of er meerdere personen bestaan met de achternaam 'Delvoie' of 'Emile Delvoie'.
+- Maak een duidelijk onderscheid tussen:
+  1. Z.E.H. Paul Emiel / Paul Emile Delvoie (priester / stichter)
+  2. Antoine Marie Armand Émile Delvoie (mijningenieur / directeur)
+- Vermeld voor ELKE gevonden persoon de overlijdensdatum en plaats die in de documenten worden genoemd.
+
+GEBRUIKERSVRAAG: {st.session_state.huidige_vraag}
 """
             payload = [onderzoeks_prompt]
             sheet_data = getattr(st.session_state, 'sheet_dossier_data', [])
 
-            tekst_gebundeld = "\n--- INHOUDSOPGAVE METADATA ---\n"
+            tekst_gebundeld = "\n--- BRONMATERIAAL & METADATA ---\n"
             for r in sheet_data:
                 tekst_gebundeld += f"Bestand: {r.get('Bestandsnaam', '')} | Personen: {r.get('Genoemde Personen', '')} | Inhoud: {r.get('Inhoud & Cijfers (NL)', '')}\n"
             payload.append(tekst_gebundeld)

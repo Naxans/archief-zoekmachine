@@ -13,16 +13,16 @@ from google.genai import types
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v1.0.9
+# Versie: v1.1.0
 # Datum: September 2026
 #
 # HERSTEL:
-# 1. Directe Drive File Link (/view) hersteld voor ingebouwde bladerpijlen.
-# 2. Synchrone Gemini-payload opbouw zonder st.rerun() om dataverlies/foutieve
-#    analyses op documenten zoals DOC_0004 te voorkomen.
+# 1. Fuzzy matching op afzonderlijke namen (matcht Emiel én Emile direct).
+# 2. Ondersteuning voor PDF-documenten (zoals sites.google.com-delvoie.pdf).
+# 3. Prioritering van stamboek/geschiedenis PDF's boven losse bewijsstukken.
 # ==============================================================================
 
-APP_VERSIE = "v1.0.9 (2026)"
+APP_VERSIE = "v1.1.0 (2026)"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
@@ -84,15 +84,10 @@ def genereer_met_retry(client, model, contents, max_retries=4):
 
 def verrijk_zoekopdracht_met_gemini(client, model, originele_vraag):
     prompt = f"""
-Jij bent een taalkundig en historisch expert gespecialiseerd in Belgische bedrijfs- en archiefstukken (periode 1900-1960).
-De gebruiker stelt de volgende zoekvraag in ons archief: "{originele_vraag}"
+Jij bent een taalkundig en historisch expert gespecialiseerd in Belgische bedrijfs- en archiefstukken.
+De gebruiker stelt de volgende zoekvraag: "{originele_vraag}"
 
-ANALYSEER EN VERRIJK DEZE ZOEKVRAAG:
-1. Vertaal namen naar hun Franse en Nederlandse varianten (bijv. Emiel <-> Emile, Charles <-> Karel, Jean <-> Jan, Jules <-> Julien).
-2. Voeg mogelijke initialen of schrijfvarianten toe (bijv. E. Delvoie, Delvoie Emile).
-3. Voeg relevante vaktermen, bedrijfsvormen of overlijdenssynoniemen toe in het Frans en Nederlands (bijv. overlijden, décès, mort, décédé, overleden, sterfte, necrologie, nécrologie, burgerlijke stand, état civil, familiebericht, faire-part, testament, erfenis, succession).
-
-Geef UITSLUITEND een compacte, door komma's gescheiden lijst van trefwoorden en naamvarianten terug. Geen toelichting.
+Geef een door komma's gescheiden lijst van losse trefwoorden en naamvarianten (bijv: Emile, Emiel, Delvoie, overleden, décès, geschiedenis).
 """
     try:
         res = genereer_met_retry(client, model, prompt)
@@ -109,15 +104,13 @@ if "bron_details" not in st.session_state:
     st.session_state.bron_details = []
 if "totaal_paginas" not in st.session_state:
     st.session_state.totaal_paginas = 0
-if "gestopt" not in st.session_state:
-    st.session_state.gestopt = False
 if "verrijkte_termen" not in st.session_state:
     st.session_state.verrijkte_termen = ""
 if "laatste_vraag" not in st.session_state:
     st.session_state.laatste_vraag = ""
 
 # ------------------------------------------------------------------------------
-# 3. INTERFACE (v1.0.9)
+# 3. INTERFACE (v1.1.0)
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
@@ -160,11 +153,11 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='wie waren de bestuursleden van de firma radio belge de construction in 1936?',
+        placeholder='Wanneer is Emile Delvoie overleden?',
         height=90
     )
 with col2:
-    max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=15, step=5)
+    max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=20, step=5)
 
 btn_col1, btn_col2 = st.columns([2, 1])
 with btn_col1:
@@ -173,28 +166,24 @@ with btn_col2:
     stop_button = st.button("⛔ Stop / Annuleer", type="secondary", use_container_width=True)
 
 if stop_button:
-    st.session_state.gestopt = True
-    st.warning("⚠️ Onderzoek is geannuleerd.")
+    st.warning("⚠️ Onderzoek geannuleerd.")
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. ONDERZOEKSLOGICA
+# 4. ONDERZOEKSLOGICA MET VOORKEUR VOOR GESCHIEDENIS/PDF DOCS
 # ------------------------------------------------------------------------------
 if submit_button:
     if not onderzoeksvraag.strip():
         st.warning("Voer a.u.b. een onderzoeksvraag in.")
     else:
-        st.session_state.gestopt = False
         st.session_state.chat_historie = []
         st.session_state.bron_details = []
         st.session_state.totaal_paginas = 0
         st.session_state.laatste_vraag = onderzoeksvraag
 
-        # Step 1: Query Expansion
-        with st.spinner("🧠 Tussenstation: Gemini analyseert taalkundige en historische varianten..."):
+        with st.spinner("🧠 Tussenstation: Trefwoorden & spelfout-varianten verzamelen..."):
             st.session_state.verrijkte_termen = verrijk_zoekopdracht_met_gemini(ai_client, MODEL_NAAM, onderzoeksvraag)
 
-        # Step 2: Inhoudsopgave doorzoeken
         with st.spinner("Inhoudsopgave scannen..."):
             try:
                 sh = gc.open(SHEET_NAAM)
@@ -218,31 +207,49 @@ if submit_button:
                     dossier_pagina_map[key]["bestanden"].append(b_naam)
                     dossier_pagina_map[key]["aantal_paginas"] += 1
 
-            alle_termen = [t.strip().lower() for t in f"{onderzoeksvraag}, {st.session_state.verrijkte_termen}".split(',') if len(t.strip()) > 1]
-            
-            geselecteerde_doc_ids = []
+            # Opsplitsing in losse zoekwoorden voor soepele matching (bijv. "emiel" of "emile")
+            ruwe_termen = f"{onderzoeksvraag}, {st.session_state.verrijkte_termen}".replace(';', ',').split(',')
+            zoek_woorden = set()
+            for t in ruwe_termen:
+                for w in t.strip().lower().split():
+                    if len(w) > 2:
+                        zoek_woorden.add(w)
+
+            prio_doc_ids = []
+            normaal_doc_ids = []
+
             for row in data:
                 doc_id_val = str(row.get('Document_ID', '')).strip()
                 b_naam_val = str(row.get('Bestandsnaam', '')).strip()
+                target_id = doc_id_val if doc_id_val else b_naam_val
+
                 rij_tekst = f"{doc_id_val} {b_naam_val} {row.get('Genoemde Personen', '')} {row.get('Onderwerp (NL)', '')} {row.get('Inhoud & Cijfers (NL)', '')}".lower()
 
-                if any(t in rij_tekst for t in alle_termen):
-                    target_id = doc_id_val if doc_id_val else b_naam_val
-                    if target_id and target_id not in geselecteerde_doc_ids:
-                        geselecteerde_doc_ids.append(target_id)
+                # Tel hoeveel van de zoekwoorden matchen in deze rij
+                matches = sum(1 for w in zoek_woorden if w in rij_tekst)
 
-            geselecteerde_doc_ids = geselecteerde_doc_ids[:max_dossiers]
+                if matches >= 1:
+                    # Hoge prioriteit toekennen aan samenvattende PDF's/geschiedenisdocumenten
+                    is_prio = "geschiedenis" in rij_tekst or "delvoie.pdf" in rij_tekst or "overzicht" in rij_tekst
+                    
+                    if target_id not in prio_doc_ids and target_id not in normaal_doc_ids:
+                        if is_prio:
+                            prio_doc_ids.append(target_id)
+                        else:
+                            normaal_doc_ids.append(target_id)
+
+            geselecteerde_doc_ids = (prio_doc_ids + normaal_doc_ids)[:max_dossiers]
 
         if not geselecteerde_doc_ids:
             st.warning("⚠️ Geen relevante documenten gevonden.")
             st.stop()
 
-        # Step 3: Payload direct opbouwen & bestanden ophalen
+        # Step 3: Payload direct opbouwen (afbeeldingen + PDF's)
         onderzoeks_payload = [
-            f"ONDERZOEKSVRAAG: {onderzoeksvraag}\nVERRIJKTE CONTEXT: {st.session_state.verrijkte_termen}\nBeantwoord de vraag zo volledig mogelijk met bronvermelding per dossier."
+            f"ONDERZOEKSVRAAG: {onderzoeksvraag}\nVERRIJKTE CONTEXT: {st.session_state.verrijkte_termen}\nBeantwoord de vraag zo nauwkeurig mogelijk. Controleer alle documenten (inclusief stamboeken en PDF-overzichten) op data en namen."
         ]
 
-        with st.spinner("Documenten ophalen uit Drive..."):
+        with st.spinner("Documenten en PDF's ophalen uit Drive..."):
             for doc_id in geselecteerde_doc_ids:
                 info = dossier_pagina_map.get(doc_id, {"bestanden": [doc_id], "aantal_paginas": 1})
                 pag_count = info["aantal_paginas"]
@@ -259,36 +266,42 @@ if submit_button:
 
                 if bestanden:
                     f = bestanden[0]
-                    b_id, b_real_naam = f['id'], f['name']
+                    b_id, b_real_naam, mime_type = f['id'], f['name'], f.get('mimeType', '')
                     weergave_titel = f"{doc_id} ({pag_count} pag.)" if pag_count > 1 else doc_id
                     
-                    # Direct naar de viewer linken om pijlnavigatie in Drive te garanderen
                     drive_url = f"https://drive.google.com/file/d/{b_id}/view"
 
                     st.session_state.bron_details.append({
                         "naam": weergave_titel,
                         "id": b_id,
-                        "url": drive_url
+                        "url": drive_url,
+                        "mime": mime_type
                     })
 
                     try:
                         req = drive_service.files().get_media(fileId=b_id)
                         f_data = req.execute()
-                        img = Image.open(io.BytesIO(f_data))
-                        if img.mode != 'RGB': img = img.convert('RGB')
-                        
-                        # Hoge kwaliteit behouden voor nauwkeurige handschriftherkenning (zoals in DOC_0004)
-                        img.thumbnail((1200, 1200))
-                        img_byte_arr = io.BytesIO()
-                        img.save(img_byte_arr, format='JPEG', quality=85)
 
-                        img_part = types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/jpeg')
-                        onderzoeks_payload.append(f"\n--- DOSSIER: {doc_id} (Bestand: {b_real_naam}) ---")
-                        onderzoeks_payload.append(img_part)
-                    except Exception:
-                        pass
+                        # Afhandeling op basis van mime_type of extensie (PDF vs Afbeelding)
+                        if "pdf" in mime_type.lower() or b_real_naam.lower().endswith(".pdf"):
+                            pdf_part = types.Part.from_bytes(data=f_data, mime_type='application/pdf')
+                            onderzoeks_payload.append(f"\n--- DOSSIER/PDF: {doc_id} (Bestand: {b_real_naam}) ---")
+                            onderzoeks_payload.append(pdf_part)
+                        else:
+                            img = Image.open(io.BytesIO(f_data))
+                            if img.mode != 'RGB': img = img.convert('RGB')
+                            
+                            img.thumbnail((1200, 1200))
+                            img_byte_arr = io.BytesIO()
+                            img.save(img_byte_arr, format='JPEG', quality=85)
 
-        # Step 4: Direct Gemini-analyse uitvoeren in dezelfde stroom
+                            img_part = types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/jpeg')
+                            onderzoeks_payload.append(f"\n--- DOSSIER: {doc_id} (Bestand: {b_real_naam}) ---")
+                            onderzoeks_payload.append(img_part)
+                    except Exception as ex:
+                        st.write(f"Fout bij inladen {b_real_naam}: {ex}")
+
+        # Step 4: Gemini-analyse uitvoeren
         with st.spinner("📑 Historisch Onderzoeksrapport genereren met Gemini..."):
             try:
                 st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
@@ -311,7 +324,6 @@ if st.session_state.bron_details:
     totaal_pag = st.session_state.totaal_paginas
     
     st.subheader(f"🖼️ Geselecteerde Archiefdocumenten ({aantal_dossiers} dossiers • {totaal_pag} pagina's)")
-    st.caption("Klik op een tegel om het document/boek te openen in de viewer.")
 
     cols = st.columns(6)
     for idx, bron in enumerate(st.session_state.bron_details):

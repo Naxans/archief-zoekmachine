@@ -13,16 +13,16 @@ from google.genai import types
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v1.0.8
+# Versie: v1.0.9
 # Datum: September 2026
 #
-# BUGFIXES & VERBETERINGEN:
-# - Opslaan van verrijkte trefwoorden & onderzoeks_payload in session_state.
-# - Voorkomt verdwijnen van de trefwoorden-expander en de NameError.
-# - Ondersteuning voor bladeren/navigatie in Drive viewer.
+# HERSTEL:
+# 1. Directe Drive File Link (/view) hersteld voor ingebouwde bladerpijlen.
+# 2. Synchrone Gemini-payload opbouw zonder st.rerun() om dataverlies/foutieve
+#    analyses op documenten zoals DOC_0004 te voorkomen.
 # ==============================================================================
 
-APP_VERSIE = "v1.0.8 (2026)"
+APP_VERSIE = "v1.0.9 (2026)"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
@@ -113,13 +113,11 @@ if "gestopt" not in st.session_state:
     st.session_state.gestopt = False
 if "verrijkte_termen" not in st.session_state:
     st.session_state.verrijkte_termen = ""
-if "onderzoeks_payload" not in st.session_state:
-    st.session_state.onderzoeks_payload = []
 if "laatste_vraag" not in st.session_state:
     st.session_state.laatste_vraag = ""
 
 # ------------------------------------------------------------------------------
-# 3. INTERFACE (v1.0.8)
+# 3. INTERFACE (v1.0.9)
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
@@ -192,9 +190,11 @@ if submit_button:
         st.session_state.totaal_paginas = 0
         st.session_state.laatste_vraag = onderzoeksvraag
 
+        # Step 1: Query Expansion
         with st.spinner("🧠 Tussenstation: Gemini analyseert taalkundige en historische varianten..."):
             st.session_state.verrijkte_termen = verrijk_zoekopdracht_met_gemini(ai_client, MODEL_NAAM, onderzoeksvraag)
 
+        # Step 2: Inhoudsopgave doorzoeken
         with st.spinner("Inhoudsopgave scannen..."):
             try:
                 sh = gc.open(SHEET_NAAM)
@@ -205,7 +205,6 @@ if submit_button:
                 st.error(f"Fout bij openen Google Sheet: {e}")
                 st.stop()
 
-            # Dossier naar Pagina-telling mapping
             dossier_pagina_map = {}
             for row in data:
                 doc_id = str(row.get('Document_ID', '')).strip()
@@ -238,8 +237,8 @@ if submit_button:
             st.warning("⚠️ Geen relevante documenten gevonden.")
             st.stop()
 
-        # Payload opbouwen & in session_state bewaren
-        st.session_state.onderzoeks_payload = [
+        # Step 3: Payload direct opbouwen & bestanden ophalen
+        onderzoeks_payload = [
             f"ONDERZOEKSVRAAG: {onderzoeksvraag}\nVERRIJKTE CONTEXT: {st.session_state.verrijkte_termen}\nBeantwoord de vraag zo volledig mogelijk met bronvermelding per dossier."
         ]
 
@@ -255,18 +254,16 @@ if submit_button:
                 basis_naam = b_naam_schoon.split('/')[-1]
 
                 query = f"name contains '{basis_naam.rsplit('.', 1)[0]}' and trashed = false"
-                res = drive_service.files().list(q=query, fields='files(id, name, parents, mimeType)').execute()
+                res = drive_service.files().list(q=query, fields='files(id, name, mimeType)').execute()
                 bestanden = res.get('files', [])
 
                 if bestanden:
                     f = bestanden[0]
                     b_id, b_real_naam = f['id'], f['name']
-                    parent_id = f.get('parents', [None])[0]
-                    
                     weergave_titel = f"{doc_id} ({pag_count} pag.)" if pag_count > 1 else doc_id
                     
-                    # Als er meerdere pagina's in het dossier zitten, koppel naar de parent folder voor bladerfunctionaliteit
-                    drive_url = f"https://drive.google.com/drive/folders/{parent_id}" if (pag_count > 1 and parent_id) else f"https://drive.google.com/file/d/{b_id}/view"
+                    # Direct naar de viewer linken om pijlnavigatie in Drive te garanderen
+                    drive_url = f"https://drive.google.com/file/d/{b_id}/view"
 
                     st.session_state.bron_details.append({
                         "naam": weergave_titel,
@@ -279,17 +276,26 @@ if submit_button:
                         f_data = req.execute()
                         img = Image.open(io.BytesIO(f_data))
                         if img.mode != 'RGB': img = img.convert('RGB')
-                        img.thumbnail((800, 800))
+                        
+                        # Hoge kwaliteit behouden voor nauwkeurige handschriftherkenning (zoals in DOC_0004)
+                        img.thumbnail((1200, 1200))
                         img_byte_arr = io.BytesIO()
-                        img.save(img_byte_arr, format='JPEG', quality=70)
+                        img.save(img_byte_arr, format='JPEG', quality=85)
 
                         img_part = types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/jpeg')
-                        st.session_state.onderzoeks_payload.append(f"\n--- DOSSIER: {doc_id} (Bestand: {b_real_naam}) ---")
-                        st.session_state.onderzoeks_payload.append(img_part)
+                        onderzoeks_payload.append(f"\n--- DOSSIER: {doc_id} (Bestand: {b_real_naam}) ---")
+                        onderzoeks_payload.append(img_part)
                     except Exception:
                         pass
 
-        st.rerun()
+        # Step 4: Direct Gemini-analyse uitvoeren in dezelfde stroom
+        with st.spinner("📑 Historisch Onderzoeksrapport genereren met Gemini..."):
+            try:
+                st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
+                analyse_response = genereer_met_retry(ai_client, MODEL_NAAM, onderzoeks_payload)
+                st.session_state.chat_historie.append(("assistant", analyse_response.text))
+            except Exception as e:
+                st.error(f"Fout tijdens analyse: {e}")
 
 # ------------------------------------------------------------------------------
 # 5. WEERGAVE RESULTATEN
@@ -324,16 +330,6 @@ if st.session_state.bron_details:
                     <div class="doc-title">{b_naam}</div>
                 </div>
             """, unsafe_allow_html=True)
-
-    if not st.session_state.chat_historie and not st.session_state.gestopt:
-        with st.spinner("📑 Historisch Onderzoeksrapport genereren met Gemini..."):
-            try:
-                st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
-                analyse_response = genereer_met_retry(ai_client, MODEL_NAAM, st.session_state.onderzoeks_payload)
-                st.session_state.chat_historie.append(("assistant", analyse_response.text))
-                st.rerun()
-            except Exception as e:
-                st.error(f"Fout tijdens analyse: {e}")
 
 if st.session_state.chat_historie:
     st.markdown("---")

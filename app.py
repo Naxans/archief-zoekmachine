@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.2.8 (NameError Fix & Sessie Opslag Vraag)"
+APP_VERSION = "v1.2.9 (Harde Bestandsnaam Match & SINGLE-ID Fix)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -111,7 +111,7 @@ def genereer_met_retry(client, model, contents, max_retries=4):
                     time.sleep(wachttijd)
                     continue
                 else:
-                    st.error("⚠️ De limiet voor de Gemini API is bereikt. Wacht 1-2 minuten.")
+                    st.error("⚠️ De limiet voor de Gemini API is tijdelijk bereikt. Wacht 1-2 minuten.")
             raise e
 
 # Session state variabelen
@@ -187,7 +187,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. SLIMME SCORING & HARDE NAAM-MATCHING
+# 4. SLIMME SCORING & HARDE NAAM-MATCHING (v1.2.9)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -250,8 +250,10 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
             dossier_scores = {}
 
             for row in data:
-                doc_id = str(row.get('Document_ID', '')).strip()
                 b_naam = str(row.get('Bestandsnaam', '')).strip()
+                doc_id = str(row.get('Document_ID', '')).strip()
+                
+                # Als Document_ID leeg is, maak een unieke ID aan op basis van de bestandsnaam
                 if not doc_id:
                     doc_id = f"SINGLE_{b_naam}"
 
@@ -264,16 +266,16 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
 
                 score = 0
 
+                # I. ABSOLUTE BOOST: Match op persoonsnamen
                 for ht in st.session_state.harde_naam_targets:
+                    if ht in b_naam_norm:
+                        score += 100000  # Extreme prioriteit als de naam in het bestand zelf staat (zoals bij de PDF)
                     if ht in pers:
-                        score += 5000 
+                        score += 50000
                     elif ht in ond or ht in inhoud:
-                        score += 2000
+                        score += 10000
 
-                for kn in st.session_state.harde_naam_targets:
-                    if kn in b_naam_norm and b_naam_norm.endswith('.pdf'):
-                        score += 5000
-
+                # II. Context versterking
                 if score > 0:
                     for term in st.session_state.uitgebreide_zoektermen:
                         if term in combi_tekst:
@@ -294,8 +296,8 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
             gezochte_bestanden = []
             
             for row in data:
-                doc_id = str(row.get('Document_ID', '')).strip()
                 b_naam = str(row.get('Bestandsnaam', '')).strip()
+                doc_id = str(row.get('Document_ID', '')).strip()
                 if not doc_id:
                     doc_id = f"SINGLE_{b_naam}"
 

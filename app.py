@@ -13,21 +13,20 @@ from google.genai import types
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v1.0.5
+# Versie: v1.0.6
 # Datum: September 2026
 #
 # CHRONOLOGISCHE VERSIE-HISTORIE:
-# - v3.8.1: Oorspronkelijke schermlayout met tegel-grid van 6 kolommen.
+# - v3.8.1: Puntensysteem (Scoring-algorithm) voor de beste zoekresultaten.
 # - v1.0.0: Introductie van Query Expansion (AI-tussenstation).
-# - v1.0.3: Her-introductie van de controle-expander voor verrijkte trefwoorden.
-# - v1.0.4: Poging tot versoepeling van het zoekfilter.
-# - v1.0.5: GELAAGDE FILTERSTRATEGIE:
-#           Stap 1: Zoek documenten van de persoon (verplichte naam-match).
-#           Stap 2: Prioriteer binnen die selectie de stukken met specifieke
-#                   overlijdenstermen (bijv. décès, necrologie, testament).
+# - v1.0.5: Gelaagde filtering (veroorzaakte limiet-fouten en foute antwoorden).
+# - v1.0.6: HERSTEL SCORINGS-ALGORITME & HARDE DOSSIER-LIMITERING:
+#           - Elk document krijgt punten op basis van trefwoord-matches.
+#           - Combinatie van Naam + Overlijdensterm geeft hoogste prioriteit.
+#           - De `max_dossiers` slider wordt vanaf nu keihard afgedwongen.
 # ==============================================================================
 
-APP_VERSIE = "v1.0.5 (2026)"
+APP_VERSIE = "v1.0.6 (2026)"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
@@ -116,7 +115,7 @@ if "gestopt" not in st.session_state:
     st.session_state.gestopt = False
 
 # ------------------------------------------------------------------------------
-# 3. INTERFACE (v1.0.5)
+# 3. INTERFACE (v1.0.6)
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
@@ -177,7 +176,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. ONDERZOEKSLOGICA (GELAAGDE FILTERING - v1.0.5)
+# 4. ONDERZOEKSLOGICA (PUNTENSYSTEEM / SCORING - v1.0.6)
 # ------------------------------------------------------------------------------
 if submit_button:
     if not onderzoeksvraag.strip():
@@ -194,7 +193,7 @@ if submit_button:
             st.write(f"**Originele vraag:** {onderzoeksvraag}")
             st.write(f"**Verrijkte trefwoorden & varianten:** {verrijkte_termen}")
 
-        with st.spinner("Inhoudsopgave scannen..."):
+        with st.spinner("Inhoudsopgave scannen en scoren..."):
             try:
                 sh = gc.open(SHEET_NAAM)
                 worksheet = sh.sheet1
@@ -204,44 +203,57 @@ if submit_button:
                 st.error(f"Fout bij openen Google Sheet: {e}")
                 st.stop()
 
-            # Bepalen welke zoektermen namen zijn vs onderwerpen
+            # Verzamelen zoektermen
             alle_termen = [t.strip().lower() for t in f"{onderzoeksvraag}, {verrijkte_termen}".split(',') if len(t.strip()) > 1]
-            
-            # Trefwoorden indelen op categorie
+
             overlijden_keywords = ["overlijden", "décès", "mort", "décédé", "overleden", "sterfte", "décès de", 
                                   "necrologie", "nécrologie", "burgerlijke stand", "état civil", "familiebericht", 
                                   "faire-part", "testament", "erfenis", "succession", "archivalia"]
-            
+
             naam_termen = [t for t in alle_termen if not any(k in t for k in overlijden_keywords)]
             onderwerp_termen = [t for t in alle_termen if any(k in t for k in overlijden_keywords)]
 
-            # STAP 1: Filteren op documenten die MINSTENS één naamvariant bevatten
-            naam_matches = []
+            # PUNTENSYSTEEM (Scoring)
+            scores = {}
+
             for row in data:
-                doc_id_val = str(row.get('Document_ID', '')).strip()
-                b_naam_val = str(row.get('Bestandsnaam', '')).strip()
-                rij_tekst = f"{doc_id_val} {b_naam_val} {row.get('Genoemde Personen', '')} {row.get('Onderwerp (NL)', '')} {row.get('Inhoud & Cijfers (NL)', '')}".lower()
+                b_naam = str(row.get('Bestandsnaam', '')).strip()
+                doc_id = str(row.get('Document_ID', '')).strip()
+                unieke_key = b_naam  # We scoren op individueel bestand niveau
 
-                if any(naam in rij_tekst for naam in naam_termen if len(naam) > 2):
-                    target_id = doc_id_val if doc_id_val else b_naam_val
-                    if target_id and target_id not in [m['id'] for m in naam_matches]:
-                        naam_matches.append({"id": target_id, "tekst": rij_tekst})
+                if not unieke_key:
+                    continue
 
-            # STAP 2: Binnen de naam-matches prioriteren op overlijdenstermen
-            hoge_prioriteit_ids = []
-            lage_prioriteit_ids = []
+                rij_tekst = f"{doc_id} {b_naam} {row.get('Genoemde Personen', '')} {row.get('Onderwerp (NL)', '')} {row.get('Inhoud & Cijfers (NL)', '')}".lower()
 
-            for item in naam_matches:
-                if any(kw in item["tekst"] for kw in onderwerp_termen):
-                    hoge_prioriteit_ids.append(item["id"])
-                else:
-                    lage_prioriteit_ids.append(item["id"])
+                score = 0
+                heeft_naam = False
+                heeft_onderwerp = False
 
-            # Combineer resultaten: eerst de specifieke overlijdensdocumenten, daarna eventuele overige documenten van de persoon
-            geselecteerde_doc_ids = hoge_prioriteit_ids + lage_prioriteit_ids
+                # Punten voor naam-hits (+10 punten per unieke naam match)
+                for naam in naam_termen:
+                    if len(naam) > 2 and naam in rij_tekst:
+                        score += 10
+                        heeft_naam = True
 
-            # STAP 3: AI-Fallback als er nog niks is gevonden
-            if not geselecteerde_doc_ids:
+                # Punten voor overlijdens-hits (+5 punten per term match)
+                for kw in onderwerp_termen:
+                    if kw in rij_tekst:
+                        score += 5
+                        heeft_onderwerp = True
+
+                # BONUS: Als een document BEIDE bevat (+15 bonuspunten)
+                if heeft_naam and heeft_onderwerp:
+                    score += 15
+
+                if score > 0:
+                    scores[unieke_key] = max(scores.get(unieke_key, 0), score)
+
+            # Sorteren op hoogste score
+            gesorteerde_bestanden = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
+
+            # AI-Fallback als de score-tabel niks oplevert
+            if not gesorteerde_bestanden:
                 dossier_samenvattingen = {}
                 for row in data:
                     doc_id = str(row.get('Document_ID', '')).strip() or f"SINGLE_{row.get('Bestandsnaam', '').strip()}"
@@ -267,37 +279,33 @@ VRAAG VAN GEBRUIKER: "{onderzoeksvraag}"
 ZOEKTERMEN: "{verrijkte_termen}"
 
 OPDRACHT:
-Selecteer maximaal {max_dossiers} relevante Document_ID's. Geef prioriteit aan documenten over overlijden, necrologie of stamboom van de gezochte persoon.
+Selecteer maximaal {max_dossiers} relevante bestandsnamen. Geef prioriteit aan overlijdensakten, necrologieën of testamenten.
 Als niks relevant is, antwoord GEEN_MATCH.
-Geef enkel de komma-gescheiden lijst van ID's terug.
+Geef enkel de komma-gescheiden lijst van bestandsnamen terug.
 """
                 try:
                     res_filter = genereer_met_retry(ai_client, MODEL_NAAM, filter_prompt)
                     raw_text = res_filter.text.strip()
                     if "geen_match" not in raw_text.lower():
-                        geselecteerde_doc_ids = [d.strip() for d in raw_text.split(',') if d.strip()]
+                        gesorteerde_bestanden = [d.strip() for d in raw_text.split(',') if d.strip()]
                 except Exception as e:
                     st.error(f"Fout tijdens scannen index: {e}")
                     st.stop()
 
-        if not geselecteerde_doc_ids:
+        if not gesorteerde_bestanden:
             st.warning("⚠️ Geen relevante documenten gevonden.")
             st.stop()
 
-        # Beperk het aantal verwerkte dossiers tot de gekozen slider-waarde
-        geselecteerde_doc_ids = geselecteerde_doc_ids[:max_dossiers]
-
-        eind_bestanden_lijst = []
-        for row in data:
-            doc_id = str(row.get('Document_ID', '')).strip()
-            b_naam = str(row.get('Bestandsnaam', '')).strip()
-            if any(doc_id.lower() == g_id.lower() or b_naam.lower() == g_id.lower() for g_id in geselecteerde_doc_ids):
-                if b_naam and b_naam not in eind_bestanden_lijst:
-                    eind_bestanden_lijst.append(b_naam)
+        # HARDE LIMITERING: Neem STRIKT de beste 'max_dossiers' bestanden
+        eind_bestanden_lijst = gesorteerde_bestanden[:max_dossiers]
 
         # Drive ophalen
-        with st.spinner(f"Documenten laden uit Drive ({len(eind_bestanden_lijst)} bestanden)..."):
-            onderzoeks_payload = [f"ONDERZOEKSVRAAG: {onderzoeksvraag}\nVERRIJKTE CONTEXT: {verrijkte_termen}\nBeantwoord de vraag grondig met bronvermelding. Als er meerdere personen met dezelfde naam voorkomen (bijv. een priester en een ingenieur), vermeld dan beide overlijdensdatums als deze in de documenten te vinden zijn."]
+        with st.spinner(f"Documenten laden uit Drive (max. {len(eind_bestanden_lijst)} bestanden)..."):
+            onderzoeks_payload = [
+                f"ONDERZOEKSVRAAG: {onderzoeksvraag}\nVERRIJKTE CONTEXT: {verrijkte_termen}\n"
+                f"INSTRUCTIE: Beantwoord de vraag uiterst precies. Controleer de feiten in de documenten nauwkeurig. "
+                f"Als er in de documenten vermeld staat dat iemand nog in leven was op een specifieke datum, trek dan geen overhaaste conclusies over een overlijden."
+            ]
 
             for b_naam in eind_bestanden_lijst:
                 b_naam_schoon = str(b_naam).strip("'\" ")

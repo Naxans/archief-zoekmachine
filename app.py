@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.2.1 (met Query Expansion)"
+APP_VERSION = "v1.2.2 (Herstelde Zoekresultaten & Query Expansion)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -63,15 +63,15 @@ except Exception as e:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 2. CONFIGURATIE & DYNAMISCHE MODEL-DETECTIE
+# 2. CONFIGURATIE & MODEL SELECTIE
 # ------------------------------------------------------------------------------
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
 def bepaal_werkend_model(client):
     kandidaten = [
-        'gemini-flash-lite-latest',
-        'gemini-flash-latest'
+        'gemini-flash-latest',
+        'gemini-flash-lite-latest'
     ]
     for model_naam in kandidaten:
         try:
@@ -153,7 +153,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: wie waren de bestuursleden van de firma radio belge de construction in 1936',
+        placeholder='Bijv: wanneer overleed emile delvoie?',
         height=100
     )
 with col2:
@@ -187,7 +187,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. QUERY EXPANSION & SCORING LOGICA (v1.2.1)
+# 4. NEUTRALE SCORING & QUERY EXPANSION LOGICA
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -216,7 +216,7 @@ if st.session_state.start_zoekopdracht:
             vraag_orig = st.session_state.huidige_vraag
             prompt_expansion = f"""
 Jij bent een zoekmachine-expert voor een historisch archief. 
-Analyseer de onderstaande gebruikersvraag en genereer een lijst van 5 tot 10 synoniemen, gerelateerde termen, historische varianten, spellingsvarianten, merknamen of trefwoorden.
+Analyseer de onderstaande gebruikersvraag en genereer een lijst van 5 tot 10 synoniemen, gerelateerde termen, historische varianten, spellingsvarianten of trefwoorden.
 
 GEBRUIKERSVRAAG: "{vraag_orig}"
 
@@ -232,22 +232,16 @@ Geef ALLEEN een JSON-array van strings terug, bijvoorbeeld:
             except Exception:
                 uitgebreide_termen = []
 
-            # Voeg originele woorden toe aan de zoektermen
+            # Haal originele woorden op uit vraag
             vraag_norm = normaliseer_tekst(vraag_orig)
             basis_woorden = [w for w in re.sub(r'[^\w\s]', ' ', vraag_norm).split() if len(w) >= 3]
             
+            # Combineer en filter unieke zoektermen
             alle_zoektermen = list(set([normaliseer_tekst(t) for t in uitgebreide_termen + basis_woorden if t]))
             st.session_state.uitgebreide_zoektermen = alle_zoektermen
 
-        # --- Stap 1c: Ranking & Scoring op basis van uitgebreide termen ---
+        # --- Stap 1c: Neutrale Scoring op basis van Trefwoord Matches ---
         with st.spinner("Stap 2/3: Archiefstukken matchen en rangschikken..."):
-            gevonden_jaren = re.findall(r'\b(19\d{2}|20\d{2})\b', vraag_norm)
-            
-            is_schade_vraag = any(w in vraag_norm for w in ['schade', 'oorlogsschade', 'vergoeding', 'bedrag', 'uitgekeerd', 'frank', 'frs', 'betaald'])
-            is_boek_vraag = any(w in vraag_norm for w in ['boek', 'rutten', 'mathieu', 'delvoie', 'elektriciteitscentrale', 'geschreven'])
-            is_radio_vraag = any(w in vraag_norm for w in ['radio', 'model', 'vedette', 'auditorium', 'classic', 'standard', 'grandluxe', 'royal', 'record'])
-            is_bestuur_vraag = any(w in vraag_norm for w in ['bestuur', 'bestuurslid', 'bestuursleden', 'directeur', 'oprichting', 'staatsblad', 'statuten', 'stichter', 'aandeelhouder', 'raad van bestuur', 'firma', 'vennootschap'])
-
             dossier_scores = {}
 
             for row in data:
@@ -265,55 +259,18 @@ Geef ALLEEN een JSON-array van strings terug, bijvoorbeeld:
 
                 score = 0
 
-                # 1. Matches vanuit Query Expansion
-                for term in st.session_state.uitgebreide_zoektermen:
-                    if term in combi_tekst:
-                        score += 35
-
-                # 2. Specifieke domeinregels
-                if is_bestuur_vraag:
-                    if any(w in combi_tekst for w in ['staatsblad', 'moniteur', 'oprichting', 'statuten', 'bijlagen', 'actes', 'balans', 'jaarrekening']):
-                        score += 150
-                    if any(w in combi_tekst for w in ['bestuur', 'beheerder', 'administrateur', 'benoeming', 'raad', 'vennootschap']):
-                        score += 80
-                    for yr in gevonden_jaren:
-                        if yr in combi_tekst:
-                            score += 250
-
-                elif is_boek_vraag:
-                    if 'rutten' in combi_tekst or 'mathieu' in combi_tekst or 'delvoie' in combi_tekst:
+                # Hoge waarde voor exacte achternaam / persoonsnaam matches
+                voornaam_achternaam_woorden = [w for w in basis_woorden if w not in ['wanneer', 'overleed', 'wie', 'wat', 'waar', 'hoe']]
+                for w in voornaam_achternaam_woorden:
+                    if w in pers:
                         score += 100
-                    if 'elektriciteit' in combi_tekst or 'centrale' in combi_tekst:
-                        score += 50
-                    if 'doc_0001' in doc_id.lower() or 'boek' in combi_tekst:
+                    elif w in combi_tekst:
                         score += 40
 
-                elif is_schade_vraag:
-                    if 'oorlogsschade' in combi_tekst or 'schadevergoeding' in combi_tekst or 'beschadiging' in combi_tekst:
-                        score += 80
-                    if '540.224' in combi_tekst or 'exploitatiemateriaal' in combi_tekst or 'ministerie' in combi_tekst:
-                        score += 60
-                    if any(naam in combi_tekst for naam in ['denijs', 'denys', 'benijs', 'gabrielle', 'hervé', 'herve']):
-                        score += 120
-                    if any(doc in doc_id.lower() for doc in ['doc_0169', 'doc_0170', 'doc_0201', 'doc_0237']):
-                        score += 150
-                    if 'totaal_16' in b_naam.lower() or 'radio-weekblad' in combi_tekst or 'annex' in b_naam.lower():
-                        score -= 50
-
-                elif is_radio_vraag:
-                    if b_naam.lower().endswith('.pdf'):
-                        score += 50
-                    modellen = ['vedette', 'auditorium', 'classic', 'standard', 'grandluxe', 'onbekend']
-                    gezochte_modellen = [m for m in modellen if m in vraag_norm]
-                    for m in gezochte_modellen:
-                        if m in combi_tekst:
-                            score += 200
-                    if 'royal' in vraag_norm and 'royal' in combi_tekst:
-                        score += 50
-                    if 'record' in vraag_norm and 'record' in combi_tekst:
-                        score += 50
-                    if 'totaal_16' in b_naam.lower() or 'radiocentrale' in combi_tekst:
-                        score -= 150
+                # Punten voor matches vanuit Query Expansion
+                for term in st.session_state.uitgebreide_zoektermen:
+                    if term in combi_tekst:
+                        score += 20
 
                 if score > 0:
                     dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + score
@@ -378,7 +335,7 @@ Geef ALLEEN een JSON-array van strings terug, bijvoorbeeld:
         st.rerun()
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE VAN DE FOTOTEGELS & NATIVE OVERLAY VIEWER (EXACT ZOALS IN v3.8.1)
+# 5. WEERGAVE VAN DE FOTOTEGELS & NATIVE OVERLAY VIEWER
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas:
     st.divider()
@@ -637,7 +594,7 @@ INSTRUCTIES VOOR JE RAPPORT:
 2. Vermeld expliciet ÁLLE betrokken namen van personen (bijv. eisers, gemachtigden, bestuurders, oprichters) én de officiële bedrijfsnamen.
 3. Als de vraag gaat over bestuursleden of de raad van bestuur, vermeld dan hun specifieke functies (voorzitter, beheerder, afgevaardigd bestuurder) indien bekend.
 4. Structureer je antwoord helder met duidelijke kopjes en een conclusie.
-5. Citeer steeds de bestandsnaam (bijv. 'DOC_0170', 'DOC_0516' of de specifieke PDF-naam) wanneer je naar specifieke informatie verwijst.
+5. Citeer steeds de bestandsnaam (bijv. 'DOC_0004', 'DOC_0009' of de specifieke afbeelding) wanneer je naar specifieke informatie verwijst.
 """
             payload = [onderzoeks_prompt]
             sheet_data = getattr(st.session_state, 'sheet_dossier_data', [])
@@ -658,7 +615,7 @@ INSTRUCTIES VOOR JE RAPPORT:
 
             payload.append(tekst_gebundeld)
 
-            # 2. Voeg de afbeeldingen gecontroleerd toe
+            # 2. Voeg afbeeldingen gecontroleerd toe
             max_fotos = 15
             geüploade_fotos = 0
 

@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.3.3 (Fixed SyntaxError & PDF Scroll)"
+APP_VERSION = "v1.3.4 (Interactive Zoom & Pan Image Viewer)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -69,14 +69,12 @@ except Exception as e:
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
-# STOPWOORDEN LIJST
 NEDERLANDSE_STOPWOORDEN = {
     'wanneer', 'hoe', 'wat', 'wie', 'waar', 'is', 'van', 'de', 'het', 'een', 'en', 'in', 
     'op', 'te', 'dat', 'die', 'met', 'voor', 'zijn', 'was', 'er', 'ze', 'om', 'over', 
     'aan', 'bij', 'naar', 'uit', 'door', 'je', 'hij', 'we', 'ze', 'om', 'of', 'tot'
 }
 
-# BEKENDE NAAM VARIANTEN
 BEKENDE_NAAM_VARIANTEN = {
     'emile': 'emile',
     'emiel': 'emiel',
@@ -345,7 +343,7 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
             st.rerun()
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE VAN DE TEGELS (SLIMME VIEWER VOOR PDF & IMAGES)
+# 5. WEERGAVE VAN DE TEGELS (ZOOM & PAN VIEWER VOOR FOTO'S, GOOGLE DRIVE VOOR PDF)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas:
     st.divider()
@@ -402,7 +400,7 @@ if st.session_state.blader_paginas:
             const alleDossiers = $alle_dossiers_json;
 
             function getImageUrl(fileId) { return "https://lh3.googleusercontent.com/d/" + fileId; }
-            function getFallbackUrl(fileId) { return "https://drive.google.com/thumbnail?id=" + fileId + "&sz=w600"; }
+            function getFallbackUrl(fileId) { return "https://drive.google.com/thumbnail?id=" + fileId + "&sz=w1600"; }
 
             function renderTiles() {
                 const grid = document.getElementById('tile-grid');
@@ -426,48 +424,140 @@ if st.session_state.blader_paginas:
                 const dossierPaginas = alleDossiers[docId] || [];
                 let currentIndex = 0;
 
+                // Zoom & Pan variabelen
+                let scale = 1;
+                let pointX = 0;
+                let pointY = 0;
+                let isDragging = false;
+                let startX = 0;
+                let startY = 0;
+
                 const modal = topDoc.createElement('div');
                 modal.id = 'rbc-drive-modal';
-                modal.style.cssText = `position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background-color: rgba(0,0,0,0.92); z-index: 9999999; display: flex; flex-direction: column; font-family: sans-serif;`;
+                modal.style.cssText = `position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background-color: rgba(0,0,0,0.92); z-index: 9999999; display: flex; flex-direction: column; font-family: sans-serif; user-select: none;`;
 
                 modal.innerHTML = `
-                    <div style="height: 56px; background: #141414; display: flex; align-items: center; padding: 0 20px; color: white; flex-shrink: 0; z-index: 10;">
-                        <button id="rbc-close-btn" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer; padding: 5px 10px;">✕</button>
-                        <div id="rbc-title-info" style="font-size: 15px; margin-left: 15px;">Laden...</div>
+                    <div style="height: 50px; background: #141414; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; color: white; flex-shrink: 0; z-index: 10;">
+                        <div style="display: flex; align-items: center;">
+                            <button id="rbc-close-btn" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer; padding: 5px 10px; margin-right: 15px;">✕</button>
+                            <div id="rbc-title-info" style="font-size: 15px; font-weight: 500;">Laden...</div>
+                        </div>
+                        <div id="rbc-zoom-controls" style="display: flex; gap: 10px; align-items: center;">
+                            <button id="rbc-reset-zoom" style="background: #333; border: 1px solid #555; color: white; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 12px;">Reset Zoom</button>
+                        </div>
                     </div>
-                    <div id="rbc-content-body" style="position: relative; flex: 1; display: flex; align-items: flex-start; justify-content: center; overflow-y: auto; padding: 20px 0;">
+                    <div id="rbc-content-body" style="position: relative; flex: 1; overflow: hidden; display: flex; align-items: center; justify-content: center; cursor: grab;">
                     </div>
                 `;
 
                 topDoc.body.appendChild(modal);
                 topDoc.body.style.overflow = 'hidden';
 
+                function resetTransform() {
+                    scale = 1;
+                    pointX = 0;
+                    pointY = 0;
+                    applyTransform();
+                }
+
+                function applyTransform() {
+                    const img = topDoc.getElementById('rbc-img');
+                    if (img) {
+                        img.style.transform = `translate($${pointX}px, $${pointY}px) scale($${scale})`;
+                    }
+                }
+
+                function setupPanAndZoom(container, img) {
+                    container.onwheel = function(e) {
+                        e.preventDefault();
+                        const xs = (e.clientX - pointX) / scale;
+                        const ys = (e.clientY - pointY) / scale;
+                        
+                        const delta = -e.deltaY;
+                        if (delta > 0) {
+                            scale *= 1.15;
+                        } else {
+                            scale /= 1.15;
+                        }
+
+                        // Grenzen aan zoomen
+                        scale = Math.min(Math.max(0.8, scale), 8);
+
+                        pointX = e.clientX - xs * scale;
+                        pointY = e.clientY - ys * scale;
+
+                        applyTransform();
+                    };
+
+                    container.onmousedown = function(e) {
+                        if (e.target.tagName === 'BUTTON' || e.target.id === 'rbc-prev-btn' || e.target.id === 'rbc-next-btn') return;
+                        e.preventDefault();
+                        isDragging = true;
+                        startX = e.clientX - pointX;
+                        startY = e.clientY - pointY;
+                        container.style.cursor = 'grabbing';
+                    };
+
+                    topDoc.onmousemove = function(e) {
+                        if (!isDragging) return;
+                        e.preventDefault();
+                        pointX = e.clientX - startX;
+                        pointY = e.clientY - startY;
+                        applyTransform();
+                    };
+
+                    topDoc.onmouseup = function() {
+                        if (isDragging) {
+                            isDragging = false;
+                            container.style.cursor = 'grab';
+                        }
+                    };
+                }
+
                 function updateViewer() {
+                    resetTransform();
                     const item = dossierPaginas[currentIndex];
                     const container = topDoc.getElementById('rbc-content-body');
+                    const zoomControls = topDoc.getElementById('rbc-zoom-controls');
                     const isPdf = item.naam.toLowerCase().endsWith('.pdf') || (item.mime && item.mime.includes('pdf'));
 
                     topDoc.getElementById('rbc-title-info').innerText = `$${item.naam} ($${currentIndex + 1}/$${dossierPaginas.length})`;
 
                     if (isPdf) {
+                        zoomControls.style.display = 'none';
                         container.innerHTML = `
                             <iframe src="https://drive.google.com/file/d/$${item.id}/preview" 
-                                    style="width: 90%; max-width: 1000px; height: 90vh; border: none; border-radius: 6px; background: #fff; box-shadow: 0 4px 20px rgba(0,0,0,0.5);">
+                                    style="width: 100%; height: 100%; border: none; background: #fff;">
                             </iframe>
                         `;
                     } else {
+                        zoomControls.style.display = 'flex';
                         container.innerHTML = `
-                            <img id="rbc-img" style="width: 90%; max-width: 900px; height: auto; display: block; margin: 0 auto; box-shadow: 0 4px 20px rgba(0,0,0,0.5);" src="$${getImageUrl(item.id)}" />
-                            <div id="rbc-prev-btn" style="position: fixed; left: 20px; top: 50%; transform: translateY(-50%); font-size: 40px; color: white; cursor: pointer; user-select: none; background: rgba(0,0,0,0.4); padding: 10px 15px; border-radius: 50%;">‹</div>
-                            <div id="rbc-next-btn" style="position: fixed; right: 20px; top: 50%; transform: translateY(-50%); font-size: 40px; color: white; cursor: pointer; user-select: none; background: rgba(0,0,0,0.4); padding: 10px 15px; border-radius: 50%;">›</div>
+                            <div id="rbc-img-wrapper" style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
+                                <img id="rbc-img" 
+                                     style="max-width: 95vw; max-height: 90vh; object-fit: contain; transition: transform 0.05s ease-out; transform-origin: 0 0; box-shadow: 0 4px 25px rgba(0,0,0,0.6);" 
+                                     src="$${getImageUrl(item.id)}" 
+                                     onerror="this.onerror=null; this.src='$${getFallbackUrl(item.id)}';" />
+                            </div>
+                            <div id="rbc-prev-btn" style="position: fixed; left: 20px; top: 50%; transform: translateY(-50%); font-size: 36px; color: white; cursor: pointer; user-select: none; background: rgba(0,0,0,0.5); padding: 8px 16px; border-radius: 50%; z-index: 20;">‹</div>
+                            <div id="rbc-next-btn" style="position: fixed; right: 20px; top: 50%; transform: translateY(-50%); font-size: 36px; color: white; cursor: pointer; user-select: none; background: rgba(0,0,0,0.5); padding: 8px 16px; border-radius: 50%; z-index: 20;">›</div>
                         `;
 
-                        topDoc.getElementById('rbc-prev-btn').onclick = () => { if (currentIndex > 0) { currentIndex--; updateViewer(); } };
-                        topDoc.getElementById('rbc-next-btn').onclick = () => { if (currentIndex < dossierPaginas.length - 1) { currentIndex++; updateViewer(); } };
+                        const img = topDoc.getElementById('rbc-img');
+                        setupPanAndZoom(container, img);
+
+                        topDoc.getElementById('rbc-prev-btn').onclick = (e) => { e.stopPropagation(); if (currentIndex > 0) { currentIndex--; updateViewer(); } };
+                        topDoc.getElementById('rbc-next-btn').onclick = (e) => { e.stopPropagation(); if (currentIndex < dossierPaginas.length - 1) { currentIndex++; updateViewer(); } };
+                        topDoc.getElementById('rbc-reset-zoom').onclick = () => resetTransform();
                     }
                 }
 
-                function sluitModal() { modal.remove(); topDoc.body.style.overflow = 'auto'; }
+                function sluitModal() { 
+                    modal.remove(); 
+                    topDoc.body.style.overflow = 'auto'; 
+                    topDoc.onmousemove = null;
+                    topDoc.onmouseup = null;
+                }
 
                 topDoc.getElementById('rbc-close-btn').onclick = sluitModal;
 

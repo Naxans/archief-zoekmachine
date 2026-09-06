@@ -13,26 +13,26 @@ from google.genai import types
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v1.0.2
+# Versie: v1.0.3
 # Datum: September 2026
 #
 # CHRONOLOGISCHE VERSIE-HISTORIE:
 # - v3.8.1: Oorspronkelijke schermlayout met tegel-grid van 6 kolommen.
 # - v1.0.0: Introductie van Query Expansion (AI-tussenstation) voor automatische
 #           verrijking van zoekvragen.
-# - v1.0.1: Eerste update van de versiestructuur naar v1.0.x.
-# - v1.0.2: Herstel van het exacte v3.8.1 visuele schermontwerp (6-koloms
-#           tegel-grid, v3.8.1 koptekst, uitklapmenu's verborgen) met behoud van
-#           de v1.0.0 Query Expansion functionaliteit.
+# - v1.0.1: Opschoning versiestructuur.
+# - v1.0.2: Herstel van de v3.8.1 visualisatie (6-koloms tegel-grid & titel-layout).
+# - v1.0.3: Her-introductie van het uitklapmenu "Bekijk de door Gemini verrijkte
+#           zoektermen" voor visuele controle van gegenereerde synoniemen en varianten.
 # ==============================================================================
 
-APP_VERSIE = "v1.0.2 (2026)"
+APP_VERSIE = "v1.0.3 (2026)"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
 
 # ------------------------------------------------------------------------------
-# 1. AUTHENTICATIE
+# 1. AUTHENTICATIE VIA STREAMLIT SECRETS
 # ------------------------------------------------------------------------------
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -57,7 +57,7 @@ except Exception as e:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 2. CONFIGURATIE & MODEL-DETECTIE
+# 2. CONFIGURATIE & DYNAMISCHE MODEL-DETECTIE
 # ------------------------------------------------------------------------------
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
@@ -94,10 +94,10 @@ De gebruiker stelt de volgende zoekvraag in ons archief: "{originele_vraag}"
 ANALYSEER EN VERRIJK DEZE ZOEKVRAAG:
 1. Vertaal namen naar hun Franse en Nederlandse varianten (bijv. Emiel <-> Emile, Charles <-> Karel, Jean <-> Jan, Jules <-> Julien).
 2. Voeg mogelijke initialen of schrijfvarianten toe (bijv. E. Delvoie, Delvoie Emile).
-3. Voeg relevante vaktermen, bedrijfsvormen of synoniemen toe in het Frans en Nederlands.
-4. Houd rekening met de chronologie van archieven (bijv. 1936 -> 1937).
+3. Voeg relevante vaktermen, bedrijfsvormen of synoniemen toe in het Frans en Nederlands (bijv. Radio <-> T.S.F. / Télégraphie sans fil, Staatsblad <-> Moniteur Belge, Bestuurder <-> Administrateur).
+4. Houd rekening met de chronologie van archieven: een vraag over boekjaar X (bijv. 1936) kan leiden tot publicaties in jaar X+1 (bijv. 1937 in het Staatsblad). Voeg eventueel het volgend jaar toe als relevant trefwoord.
 
-Geef UITSLUITEND een compacte, door komma's gescheiden lijst van trefwoorden en naamvarianten terug. Geen toelichting.
+Geef UITSLUITEND een compacte, door komma's gescheiden lijst van trefwoorden en naamvarianten terug. Geen toelichting of extra tekst.
 """
     try:
         res = genereer_met_retry(client, model, prompt)
@@ -116,11 +116,11 @@ if "gestopt" not in st.session_state:
     st.session_state.gestopt = False
 
 # ------------------------------------------------------------------------------
-# 3. INTERFACE (EXACTE v3.8.1 STIJL - v1.0.2)
+# 3. INTERFACE (v3.8.1 STIJL MET CONTROLE-EXPANDER - v1.0.3)
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
-# Custom CSS voor de tegel-layout uit v3.8.1
+# Custom CSS voor het 6-koloms tegel-grid
 st.markdown("""
 <style>
     .doc-card {
@@ -190,8 +190,16 @@ if submit_button:
         st.session_state.chat_historie = []
         st.session_state.bron_details = []
 
-        verrijkte_termen = verrijk_zoekopdracht_met_gemini(ai_client, MODEL_NAAM, onderzoeksvraag)
+        # TUSSENSTATION: Zoekopdracht verrijken via Gemini
+        with st.spinner("🧠 Tussenstation: Gemini analyseert taalkundige en historische varianten..."):
+            verrijkte_termen = verrijk_zoekopdracht_met_gemini(ai_client, MODEL_NAAM, onderzoeksvraag)
+            
+        # VISUELE CONTROLE-EXPANDER (Her-geïntroduceerd in v1.0.3)
+        with st.expander("🧠 Bekijk de door Gemini verrijkte zoektermen (Query Expansion)", expanded=True):
+            st.write(f"**Originele vraag:** {onderzoeksvraag}")
+            st.write(f"**Verrijkte trefwoorden & varianten:** {verrijkte_termen}")
 
+        # STAP 1: Inhoudsopgave scannen uit Google Sheet
         with st.spinner("Inhoudsopgave scannen..."):
             try:
                 sh = gc.open(SHEET_NAAM)
@@ -263,6 +271,7 @@ Geef enkel de komma-gescheiden lijst van ID's terug.
                 if b_naam and b_naam not in eind_bestanden_lijst:
                     eind_bestanden_lijst.append(b_naam)
 
+        # Drive ophalen
         with st.spinner(f"Documenten laden uit Drive ({len(eind_bestanden_lijst)} bestanden)..."):
             onderzoeks_payload = [f"ONDERZOEKSVRAAG: {onderzoeksvraag}\nVERRIJKTE CONTEXT: {verrijkte_termen}\nBeantwoord grondig met bronvermelding."]
 
@@ -295,6 +304,7 @@ Geef enkel de komma-gescheiden lijst van ID's terug.
                     except Exception:
                         pass
 
+        # Rapport genereren
         with st.spinner("Rapport genereren..."):
             try:
                 st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)

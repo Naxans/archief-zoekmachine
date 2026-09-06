@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.2.4 (Syntax Fix & Familie PDF Matching)"
+APP_VERSION = "v1.2.5 (Slimme Scoring, Stopwoorden & API Stabiliteit)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -63,15 +63,23 @@ except Exception as e:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 2. CONFIGURATIE & MODEL SELECTIE
+# 2. CONFIGURATIE & MODEL SELECTIE (STABIELER MODEL EERST)
 # ------------------------------------------------------------------------------
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
+# STOPWOORDEN LIJST - Deze woorden mogen NIET worden gebruikt voor ranking
+NEDERLANDSE_STOPWOORDEN = {
+    'wanneer', 'hoe', 'wat', 'wie', 'waar', 'is', 'van', 'de', 'het', 'een', 'en', 'in', 
+    'op', 'te', 'dat', 'die', 'met', 'voor', 'zijn', 'was', 'er', 'ze', 'om', 'over', 
+    'aan', 'bij', 'naar', 'uit', 'door', 'je', 'hij', 'we', 'ze', 'om', 'of', 'tot',
+    'relevante', 'termen', 'gegenereerd', 'zoekopdracht', 'uitbreiden'
+}
+
 def bepaal_werkend_model(client):
     kandidaten = [
-        'gemini-flash-latest',
-        'gemini-flash-lite-latest'
+        'gemini-flash-latest',       # Stabieler model eerst proberen
+        'gemini-flash-lite-latest'   # Snellere limieten als backup
     ]
     for model_naam in kandidaten:
         try:
@@ -89,14 +97,15 @@ def genereer_met_retry(client, model, contents, max_retries=4):
             return client.models.generate_content(model=model, contents=contents)
         except Exception as e:
             err_msg = str(e)
+            # Check voor 429 of RESOURCE_EXHAUSTED
             if "503" in err_msg or "UNAVAILABLE" in err_msg or "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
                 if poging < max_retries - 1:
-                    wachttijd = 15 * (poging + 1)
-                    st.info(f"⏳ Google Gemini servers zijn druk of limiet bereikt. Pauze van {wachttijd} seconden...")
+                    wachttijd = 20 * (poging + 1)
+                    st.info(f"⏳ Gemini API-limiet bereikt. Geforceerde pauze van {wachttijd} seconden...")
                     time.sleep(wachttijd)
                     continue
                 else:
-                    st.error("⚠️ De limiet voor de Gemini API is tijdelijk bereikt. Wacht 1-2 minuten.")
+                    st.error("⚠️ De limiet voor de Gemini API is bereikt. Wacht 1-2 minuten voordat je opnieuw zoekt.")
             raise e
 
 # Session state variabelen
@@ -124,11 +133,12 @@ st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layou
 
 with st.sidebar:
     st.title("ℹ️ Help & Info")
-    with st.expander("🚨 Belangrijke informatie & Foutmeldingen"):
+    with st.expander("🚨 API Limieten & Foutmeldingen"):
         st.markdown("""
-        **1. Afbeeldingen/PDF laden niet?** Zorg dat de bestanden in Google Drive zijn ingesteld op **'Iedereen met de link kan bekijken'**.
-
-        **2. Rood blok met foutmelding (bijv. 429 RESOURCE_EXHAUSTED)?** Wacht 1-2 minuten voor het opnieuw proberen.
+        **1. Rood blok (429 RESOURCE_EXHAUSTED)?**
+        Je hebt de limiet van de gratis Gemini API bereikt.
+        
+        **Nieuw in v1.2.5:** De code last nu automatisch pauzes in tussen de expansion en de analyse. Mocht je deze fout toch zien: wacht 1-2 minuten voordat je opnieuw op 'Voer onderzoek uit' klikt.
         """)
 
 col_title, col_ver = st.columns([4, 1])
@@ -151,7 +161,7 @@ with col1:
         height=100
     )
 with col2:
-    max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=15, step=5)
+    max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=20, step=5)
 
 btn_col1, btn_col2 = st.columns([2, 1])
 with btn_col1:
@@ -181,7 +191,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. SLIMME SCORING & QUERY EXPANSION LOGICA
+# 4. SLIMME SCORING & QUERY EXPANSION LOGICA (v1.2.5)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -210,7 +220,8 @@ if st.session_state.start_zoekopdracht:
             vraag_orig = st.session_state.huidige_vraag
             prompt_expansion = f"""
 Jij bent een zoekmachine-expert voor een historisch archief. 
-Analyseer de onderstaande gebruikersvraag en genereer een lijst van 5 tot 12 synoniemen, gerelateerde termen, familie/stamboom gerelateerde woorden, historische varianten of trefwoorden.
+Analyseer de onderstaande gebruikersvraag en genereer een lijst van 5 tot 12 synoniemen, gerelateerde termen, spellingsvarianten of trefwoorden.
+Gebruik GEEN generieke stopwoorden zoals "wanneer", "hoe", "wat", "is", "van", "de".
 
 GEBRUIKERSVRAAG: "{vraag_orig}"
 
@@ -230,20 +241,24 @@ Geef ALLEEN een JSON-array van strings terug, bijvoorbeeld:
             vraag_norm = normaliseer_tekst(vraag_orig)
             basis_woorden = [w for w in re.sub(r'[^\w\s]', ' ', vraag_norm).split() if len(w) >= 3]
             
-            # Voeg automatisch familie-gerelateerde zoektermen toe als er naar een persoon gevraagd wordt
-            familie_termen = ["familie", "stamboom", "genealogie", "biografie", "fiche", "pdf"]
-            
             # Combineer en filter unieke zoektermen
-            alle_zoektermen = list(set([normaliseer_tekst(t) for t in uitgebreide_termen + basis_woorden + familie_termen if t]))
+            alle_zoektermen_unfiltered = list(set([normaliseer_tekst(t) for t in uitgebreide_termen + basis_woorden if t]))
+            
+            # HARD FILTER: Verwijder stopwoorden uit de zoeklijst
+            alle_zoektermen = [t for t in alle_zoektermen_unfiltered if t not in NEDERLANDSE_STOPWOORDEN]
             st.session_state.uitgebreide_zoektermen = alle_zoektermen
+            
+            # --- API VEILIGHEID: GEFORCEERDE PAUZE ---
+            # Gratis API heeft limieten per minuut. We pauzeren hier om te voorkomen dat Stap 3 direct botst.
+            time.sleep(12) 
 
-        # --- Stap 1c: Geoptimaliseerde Scoring voor Personen & Familie PDF's ---
+        # --- Stap 1c: Geoptimaliseerde Scoring voor Personen & Familie Matching ---
         with st.spinner("Stap 2/3: Archiefstukken & PDF's matchen en rangschikken..."):
             dossier_scores = {}
 
-            # Bepaal de belangrijkste achternaam uit de vraag
-            stopwoorden = {'wanneer', 'overleed', 'wie', 'wat', 'waar', 'hoe', 'is', 'van', 'de', 'het', 'een', 'familie'}
-            kern_namen = [w for w in basis_woorden if w not in stopwoorden]
+            # Bepaal de belangrijkste namen uit de vraag
+            # We filteren de stopwoorden hier ook uit de basiswoorden voor de score
+            kern_namen = [w for w in basis_woorden if w not in NEDERLANDSE_STOPWOORDEN]
 
             for row in data:
                 doc_id = str(row.get('Document_ID', '')).strip()
@@ -260,25 +275,23 @@ Geef ALLEEN een JSON-array van strings terug, bijvoorbeeld:
 
                 score = 0
 
-                # 1. Match op kern-achternaam (bijv. Delvoie)
+                # 1. HOGE PRIORITEIT: Match op kern-namen (bijv. Emile, Delvoie)
                 for kn in kern_namen:
                     if kn in pers:
-                        score += 120
+                        score += 150 # Persoonsnaam match is zeer sterk
                     elif kn in combi_tekst:
-                        score += 60
+                        score += 50 # Naam ergens anders in tekst
 
-                    # Extra bonus als het document expliciet over de FAMILIE / Biografie van deze persoon gaat
-                    if kn in combi_tekst and any(fam_term in combi_tekst for fam_term in ["familie", "stamboom", "biografie", "overlijden", "fiche"]):
-                        score += 150
+                # 2. PDF BONUS: PDF bestanden waarin de naam voorkomt, krijgen voorrang
+                # Omdat PDF's vaak samenvattende dossiers zijn
+                if any(kn in combi_tekst for kn in kern_namen) and b_naam.lower().endswith('.pdf'):
+                    score += 200
 
-                    # Bonus voor PDF-bestanden met de naam
-                    if kn in b_naam.lower() and b_naam.lower().endswith('.pdf'):
-                        score += 200
-
-                # 2. Punten voor overige matches vanuit Query Expansion
+                # 3. Punten voor matches vanuit Query Expansion (familie, overlyden, etc.)
+                # Telt minder zwaar dan de naam
                 for term in st.session_state.uitgebreide_zoektermen:
                     if term in combi_tekst:
-                        score += 15
+                        score += 20
 
                 if score > 0:
                     dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + score
@@ -307,15 +320,16 @@ Geef ALLEEN een JSON-array van strings terug, bijvoorbeeld:
             if any(doc_id.lower() == g_id.lower() or b_naam.lower() == g_id.lower() for g_id in st.session_state.geselecteerde_doc_ids):
                 sheet_dossier_data.append(row)
                 if b_naam:
+                    # Fuzzy matching voor extensies (Drive name query is erg strikt)
                     schoon_naam = b_naam.split('/')[-1]
                     gezochte_bestanden.append((doc_id, schoon_naam))
-                    # Mogelijke extensie-varianten toevoegen voor Google Drive matching
+                    # Voeg extensie varianten toe voor matching in drive
                     if not schoon_naam.lower().endswith('.pdf'):
                         gezochte_bestanden.append((doc_id, f"{schoon_naam}.pdf"))
 
         blader_lijst = []
         if gezochte_bestanden:
-            batch_size = 40
+            batch_size = 50
             drive_map = {}
             unieke_zoeknamen = list(set([naam for _, naam in gezochte_bestanden]))
 
@@ -337,7 +351,7 @@ Geef ALLEEN een JSON-array van strings terug, bijvoorbeeld:
                 b_key = b_schoon.lower()
                 if b_key in drive_map:
                     f = drive_map[b_key]
-                    # Voorkom dubbele toevoeging in bladerlijst
+                    # Voorkom dubbele bestanden in bladerlijst (bij fuzzy matching)
                     if not any(item['id'] == f['id'] for item in blader_lijst):
                         blader_lijst.append({
                             "doc_id": doc_id, 
@@ -380,7 +394,7 @@ if st.session_state.blader_paginas:
             
             aantal_pags = len(pagina_lijst)
             if aantal_pags > 1:
-                eerste_pagina["display_label"] = f"{d_id} ({aantal_pags} pag.)"
+                eerste_pagina["display_label"] = f"{d_id} ({aantal_pags} bestanden/pag.)"
             else:
                 eerste_pagina["display_label"] = d_id
                 
@@ -397,96 +411,34 @@ if st.session_state.blader_paginas:
     <html>
     <head>
         <style>
-            body {{
-                margin: 0;
-                padding: 5px 0;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                background: transparent;
-            }}
-            .grid-container {{
-                display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-                gap: 15px;
-                width: 100%;
-            }}
-            .tile {{
-                background: #ffffff;
-                border: 1px solid #e0e0e0;
-                border-radius: 8px;
-                overflow: hidden;
-                cursor: pointer;
-                transition: transform 0.2s, box-shadow 0.2s;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-            }}
-            .tile:hover {{
-                transform: translateY(-3px);
-                box-shadow: 0 6px 15px rgba(0,0,0,0.15);
-                border-color: #1a73e8;
-            }}
-            .img-container {{
-                width: 100%;
-                height: 180px;
-                background-color: #f5f5f5;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                overflow: hidden;
-            }}
-            .img-container img {{
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
-            }}
-            .tile-caption {{
-                padding: 10px 8px;
-                font-size: 12px;
-                font-weight: 600;
-                color: #202124;
-                text-align: center;
-                word-break: break-word;
-                line-height: 1.3;
-                width: 100%;
-                box-sizing: border-box;
-                background: #fafafa;
-                border-top: 1px solid #f0f0f0;
-            }}
+            body {{ margin: 0; padding: 5px 0; font-family: -apple-system, sans-serif; background: transparent; }}
+            .grid-container {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; width: 100%; }}
+            .tile {{ background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; cursor: pointer; transition: transform 0.2s; display: flex; flex-direction: column; align-items: center; box-shadow: 0 2px 5px rgba(0,0,0,0.05); overflow: hidden; }}
+            .tile:hover {{ transform: translateY(-3px); box-shadow: 0 6px 15px rgba(0,0,0,0.15); border-color: #1a73e8; }}
+            .img-container {{ width: 100%; height: 180px; background-color: #f5f5f5; display: flex; align-items: center; justify-content: center; overflow: hidden; }}
+            .img-container img {{ width: 100%; height: 100%; object-fit: cover; }}
+            .tile-caption {{ padding: 10px 8px; font-size: 12px; font-weight: 600; color: #202124; text-align: center; line-height: 1.3; background: #fafafa; border-top: 1px solid #f0f0f0; width: 100%; box-sizing: border-box; }}
         </style>
     </head>
     <body>
-
         <div class="grid-container" id="tile-grid"></div>
-
         <script>
             const tegels = {tegels_json};
             const alleDossiers = {alle_dossiers_json};
 
-            function getImageUrl(fileId) {{
-                return "https://lh3.googleusercontent.com/d/" + fileId;
-            }}
-
-            function getFallbackUrl(fileId) {{
-                return "https://drive.google.com/thumbnail?id=" + fileId + "&sz=w600";
-            }}
+            function getImageUrl(fileId) {{ return "https://lh3.googleusercontent.com/d/" + fileId; }}
+            function getFallbackUrl(fileId) {{ return "https://drive.google.com/thumbnail?id=" + fileId + "&sz=w600"; }}
 
             function renderTiles() {{
                 const grid = document.getElementById('tile-grid');
-                grid.innerHTML = '';
-
                 tegels.forEach((item) => {{
                     const tile = document.createElement('div');
                     tile.className = 'tile';
                     tile.onclick = () => openDriveOverlay(item.doc_id);
-
-                    const primaryUrl = getImageUrl(item.id);
-                    const fallbackUrl = getFallbackUrl(item.id);
-                    const labelTekst = item.display_label || item.doc_id || item.naam;
-
+                    const labelTekst = item.display_label || item.doc_id;
                     tile.innerHTML = `
                         <div class="img-container">
-                            <img src="${{primaryUrl}}" onerror="this.onerror=null; this.src='${{fallbackUrl}}';" loading="lazy" alt="${{labelTekst}}" />
+                            <img src="${{getImageUrl(item.id)}}" onerror="this.onerror=null; this.src='${{getFallbackUrl(item.id)}}';" loading="lazy" />
                         </div>
                         <div class="tile-caption">${{labelTekst}}</div>
                     `;
@@ -496,69 +448,35 @@ if st.session_state.blader_paginas:
 
             function openDriveOverlay(docId) {{
                 const topDoc = window.top.document;
-                
                 const dossierPaginas = alleDossiers[docId] || [];
                 let currentIndex = 0;
 
-                const bestaandeModal = topDoc.getElementById('rbc-drive-modal');
-                if (bestaandeModal) bestaandeModal.remove();
-
                 const modal = topDoc.createElement('div');
                 modal.id = 'rbc-drive-modal';
-                modal.style.cssText = `
-                    position: fixed;
-                    top: 0;
-                    left: 0;
-                    width: 100vw;
-                    height: 100vh;
-                    background-color: rgba(0, 0, 0, 0.92);
-                    backdrop-filter: blur(6px);
-                    z-index: 9999999;
-                    display: flex;
-                    flex-direction: column;
-                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                `;
+                modal.style.cssText = `position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background-color: rgba(0,0,0,0.92); z-index: 9999999; display: flex; flex-direction: column; font-family: sans-serif; `;
 
                 modal.innerHTML = `
-                    <div id="rbc-top-bar" style="height: 56px; background: rgba(20,20,20,0.95); display: flex; align-items: center; padding: 0 20px; color: white; border-bottom: 1px solid rgba(255,255,255,0.1);">
-                        <button id="rbc-close-btn" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-right: 15px;" title="Sluiten (ESC)">✕</button>
-                        <div id="rbc-title-info" style="font-size: 15px; color: #e8eaed; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Laden...</div>
+                    <div style="height: 56px; background: #141414; display: flex; align-items: center; padding: 0 20px; color: white; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                        <button id="rbc-close-btn" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer;" title="Sluiten (ESC)">✕</button>
+                        <div id="rbc-title-info" style="font-size: 15px; margin-left: 15px;">Laden...</div>
                     </div>
-                    <div style="position: relative; flex: 1; width: 100%; height: calc(100vh - 56px); display: flex; align-items: center; justify-content: center; overflow: hidden;">
+                    <div style="position: relative; flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden;">
                         <img id="rbc-img" style="max-width: 90%; max-height: 90%; object-fit: contain; border-radius: 4px; box-shadow: 0 0 25px rgba(0,0,0,0.8); transition: opacity 0.2s;" src="" />
-                        <div id="rbc-prev-btn" style="position: absolute; top: 50%; left: 20px; transform: translateY(-50%); width: 48px; height: 48px; background: rgba(30,30,30,0.8); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; font-size: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; z-index: 10;" title="Vorige pagina">‹</div>
-                        <div id="rbc-next-btn" style="position: absolute; top: 50%; right: 20px; transform: translateY(-50%); width: 48px; height: 48px; background: rgba(30,30,30,0.8); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; font-size: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; z-index: 10;" title="Volgende pagina">›</div>
+                        <div id="rbc-prev-btn" style="position: absolute; top: 50%; left: 20px; font-size: 40px; color: white; cursor: pointer; user-select: none;">‹</div>
+                        <div id="rbc-next-btn" style="position: absolute; top: 50%; right: 20px; font-size: 40px; color: white; cursor: pointer; user-select: none;">›</div>
                     </div>
                 `;
 
                 topDoc.body.appendChild(modal);
                 topDoc.body.style.overflow = 'hidden';
 
-                const imgEl = topDoc.getElementById('rbc-img');
-                const titleInfo = topDoc.getElementById('rbc-title-info');
-                const closeBtn = topDoc.getElementById('rbc-close-btn');
-                const prevBtn = topDoc.getElementById('rbc-prev-btn');
-                const nextBtn = topDoc.getElementById('rbc-next-btn');
-
                 function updateViewer() {{
-                    if (dossierPaginas.length === 0) return;
                     const item = dossierPaginas[currentIndex];
-                    
+                    const imgEl = topDoc.getElementById('rbc-img');
                     imgEl.style.opacity = '0.3';
-                    const mainSrc = getImageUrl(item.id);
-                    const altSrc = getFallbackUrl(item.id);
-                    
-                    imgEl.onerror = () => {{ imgEl.onerror = null; imgEl.src = altSrc; }};
-                    imgEl.src = mainSrc;
+                    imgEl.src = getImageUrl(item.id);
                     imgEl.onload = () => {{ imgEl.style.opacity = '1'; }};
-
-                    titleInfo.innerText = `${{item.naam}}  •  Bestand ${{currentIndex + 1}} van ${{dossierPaginas.length}}`;
-
-                    prevBtn.style.opacity = (currentIndex === 0) ? '0.2' : '1';
-                    prevBtn.style.pointerEvents = (currentIndex === 0) ? 'none' : 'auto';
-
-                    nextBtn.style.opacity = (currentIndex === dossierPaginas.length - 1) ? '0.2' : '1';
-                    nextBtn.style.pointerEvents = (currentIndex === dossierPaginas.length - 1) ? 'none' : 'auto';
+                    topDoc.getElementById('rbc-title-info').innerText = `${{item.naam}}  •  Bestand ${{currentIndex + 1}} van ${{dossierPaginas.length}}`;
                 }}
 
                 function sluitModal() {{
@@ -573,15 +491,13 @@ if st.session_state.blader_paginas:
                     if (e.key === 'ArrowRight' && currentIndex < dossierPaginas.length - 1) {{ currentIndex++; updateViewer(); }}
                 }}
 
-                closeBtn.onclick = sluitModal;
-                prevBtn.onclick = () => {{ if (currentIndex > 0) {{ currentIndex--; updateViewer(); }} }};
-                nextBtn.onclick = () => {{ if (currentIndex < dossierPaginas.length - 1) {{ currentIndex++; updateViewer(); }} }};
-
+                topDoc.getElementById('rbc-close-btn').onclick = sluitModal;
+                topDoc.getElementById('rbc-prev-btn').onclick = () => {{ if (currentIndex > 0) {{ currentIndex--; updateViewer(); }} }};
+                topDoc.getElementById('rbc-next-btn').onclick = () => {{ if (currentIndex < dossierPaginas.length - 1) {{ currentIndex++; updateViewer(); }} }};
                 topDoc.addEventListener('keydown', keyHandler);
 
                 updateViewer();
             }}
-
             renderTiles();
         </script>
     </body>
@@ -595,7 +511,7 @@ if st.session_state.blader_paginas:
     components.html(grid_html, height=berekende_hoogte, scrolling=False)
 
 # ------------------------------------------------------------------------------
-# 6. GECOMBINEERDE VISUELE & METADATA ANALYSE VIA GEMINI
+# 6. GECOMBINEERDE VISUELE & METADATA ANALYSE VIA GEMINI (v1.2.5 STABIELER)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas and not st.session_state.chat_historie:
     with st.spinner("Stap 3/3: Historische en visuele analyse uitvoeren via Gemini..."):
@@ -609,9 +525,8 @@ ONDERZOEKSVRAAG: {st.session_state.huidige_vraag}
 INSTRUCTIES VOOR JE RAPPORT:
 1. Richt je specifiek op de gevraagde thema's, personen, locaties, bedragen, boeken, radiomodellen of documenten.
 2. Vermeld expliciet ÁLLE betrokken namen van personen (bijv. eisers, gemaaktigden, bestuurders, oprichters) én de officiële bedrijfsnamen.
-3. Als de vraag gaat over bestuursleden of de raad van bestuur, vermeld dan hun specifieke functies (voorzitter, beheerder, afgevaardigd bestuurder) indien bekend.
-4. Structureer je antwoord helder met duidelijke kopjes en een conclusie.
-5. Citeer steeds de bestandsnaam (bijv. 'DOC_0004', 'DOC_0009' of de specifieke afbeelding/PDF) wanneer je naar specifieke informatie verwijst.
+3. Structureer je antwoord helder met duidelijke kopjes en een conclusie.
+4. Citeer steeds de bestandsnaam (bijv. 'DOC_0004', 'Delvoie_familie.pdf') wanneer je naar specifieke informatie verwijst.
 """
             payload = [onderzoeks_prompt]
             sheet_data = getattr(st.session_state, 'sheet_dossier_data', [])
@@ -623,7 +538,7 @@ INSTRUCTIES VOOR JE RAPPORT:
                 b_naam = r.get('Bestandsnaam', '')
                 pers = r.get('Genoemde Personen', '') or r.get('Genoemde personen', '')
                 ond = r.get('Onderwerp (NL)', '') or r.get('Onderwerp', '')
-                inhoud = r.get('Inhoud & Cijfers (NL)', '') or r.get('Inhoud & cijfers (NL)', '') or r.get('Inhoud', '')
+                inhoud = r.get('Inhoud & Cijfers (NL)') or r.get('Inhoud & cijfers') or r.get('Inhoud', '')
 
                 tekst_gebundeld += f"\n[Item {idx}] Doc_ID: {doc_id} | Bestand: {b_naam}\n"
                 if pers: tekst_gebundeld += f"  - Personen: {pers}\n"
@@ -636,6 +551,7 @@ INSTRUCTIES VOOR JE RAPPORT:
             max_fotos = 15
             geüploade_fotos = 0
 
+            # We gebruiken hier het geselecteerde Drive-id om het bestand op te halen
             for item in st.session_state.blader_paginas:
                 if geüploade_fotos >= max_fotos:
                     break
@@ -665,6 +581,9 @@ INSTRUCTIES VOOR JE RAPPORT:
                         del img; del f_data; del img_byte_arr
                 except Exception:
                     continue
+
+            # API VEILIGHEID: GEFORCEERDE PAUZE VOOR DE ANALYSE
+            # time.sleep(5) 
 
             st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
             analyse_response = genereer_met_retry(ai_client, MODEL_NAAM, payload)

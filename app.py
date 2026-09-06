@@ -1,32 +1,41 @@
 import io
 import time
+import string
 import logging
 import warnings
-import base64
+import json
+import re
+import gc
+import math
 import streamlit as st
+import streamlit.components.v1 as components
 from PIL import Image
 import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
 from google import genai
 from google.genai import types
 
-# ==============================================================================
-# ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
-# ==============================================================================
-# Versie: v1.2.1
-# Datum: September 2026
-#
-# FEATURE / FIX:
-# - Herstel van de originele, strakke, donkere fullscreen overlay (Foto 1).
-# - Base64 afbeeldingsweergave om 30s timeouts/crashes definitief te voorkomen.
-# ==============================================================================
-
-APP_VERSIE = "v1.2.1 (2026)"
+# ------------------------------------------------------------------------------
+# APP VERSIEBEHEER
+# ------------------------------------------------------------------------------
+APP_VERSION = "v3.8.1"
+APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
+
+def natuurlijke_sortering(item):
+    tekst = item.get('naam', '') if isinstance(item, dict) else str(item)
+    return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', tekst)]
+
+def normaliseer_tekst(tekst):
+    """Zet tekst om naar lowercase en vangt spellingsvariaties op (zoals ij <-> y)."""
+    if not tekst:
+        return ""
+    tekst = str(tekst).lower()
+    tekst = tekst.replace('ij', 'y')
+    return tekst
 
 # ------------------------------------------------------------------------------
 # 1. AUTHENTICATIE VIA STREAMLIT SECRETS
@@ -42,25 +51,28 @@ def init_services():
         st.secrets["gcp_service_account"],
         scopes=SCOPES
     )
-    gc = gspread.authorize(creds)
+    gc_drive = gspread.authorize(creds)
     drive_service = build('drive', 'v3', credentials=creds)
     ai_client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-    return gc, drive_service, ai_client
+    return gc_drive, drive_service, ai_client
 
 try:
-    gc, drive_service, ai_client = init_services()
+    gc_drive, drive_service, ai_client = init_services()
 except Exception as e:
     st.error(f"Fout bij verbinden met Google/Gemini diensten: {e}")
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 2. CONFIGURATIE & HELPER FUNCTIES
+# 2. CONFIGURATIE & DYNAMISCHE MODEL-DETECTIE
 # ------------------------------------------------------------------------------
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
 def bepaal_werkend_model(client):
-    kandidaten = ['gemini-flash-lite-latest', 'gemini-flash-latest']
+    kandidaten = [
+        'gemini-flash-lite-latest',
+        'gemini-flash-latest'
+    ]
     for model_naam in kandidaten:
         try:
             client.models.generate_content(model=model_naam, contents="ping")
@@ -79,140 +91,71 @@ def genereer_met_retry(client, model, contents, max_retries=4):
             err_msg = str(e)
             if "503" in err_msg or "UNAVAILABLE" in err_msg or "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
                 if poging < max_retries - 1:
-                    time.sleep(15 * (poging + 1))
+                    wachttijd = 15 * (poging + 1)
+                    st.info(f"⏳ Google Gemini servers zijn druk of limiet bereikt. Pauze van {wachttijd} seconden...")
+                    time.sleep(wachttijd)
                     continue
+                else:
+                    st.error("⚠️ De limiet voor de Gemini API is tijdelijk bereikt. Wacht 1-2 minuten.")
             raise e
 
-def laad_drive_bestand_payload(drive_service, file_id, mime_type, file_name):
-    request = drive_service.files().get_media(fileId=file_id)
-    fh = io.BytesIO()
-    downloader = MediaIoBaseDownload(fh, request)
-    done = False
-    while not done:
-        status, done = downloader.next_chunk()
-    
-    file_bytes = fh.getvalue()
-
-    if "pdf" in mime_type.lower() or file_name.lower().endswith(".pdf"):
-        return types.Part.from_bytes(data=file_bytes, mime_type='application/pdf')
-    else:
-        img = Image.open(io.BytesIO(file_bytes))
-        if img.mode != 'RGB': 
-            img = img.convert('RGB')
-        img.thumbnail((1200, 1200))
-        img_byte_arr = io.BytesIO()
-        img.save(img_byte_arr, format='JPEG', quality=85)
-        return types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/jpeg')
-
-@st.cache_data(ttl=3600)
-def haal_afbeelding_base64(file_id):
-    """Haalt afbeelding op en converteert naar base64 voor snelle weergave in overlay zonder timeout"""
-    try:
-        request = drive_service.files().get_media(fileId=file_id)
-        fh = io.BytesIO()
-        downloader = MediaIoBaseDownload(fh, request)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
-        return base64.b64encode(fh.getvalue()).decode('utf-8')
-    except Exception:
-        return None
-
-def verrijk_zoekopdracht_met_gemini(client, model, originele_vraag):
-    prompt = f"""
-Jij bent een taalkundig en historisch expert gespecialiseerd in Belgische bedrijfs- en archiefstukken.
-De gebruiker stelt de volgende zoekvraag: "{originele_vraag}"
-
-Geef een door komma's gescheiden lijst van synoniemen, actiewoorden en naamvarianten (bijv: Emile, Emiel, Delvoie, overleden, décès, geschiedenis).
-"""
-    try:
-        res = genereer_met_retry(client, model, prompt)
-        return res.text.strip()
-    except Exception:
-        return originele_vraag
-
-# Session state initialisatie
+# Session state variabelen
 if "actieve_chat" not in st.session_state:
     st.session_state.actieve_chat = None
 if "chat_historie" not in st.session_state:
     st.session_state.chat_historie = []
-if "bron_details" not in st.session_state:
-    st.session_state.bron_details = []
-if "totaal_paginas" not in st.session_state:
-    st.session_state.totaal_paginas = 0
-if "verrijkte_termen" not in st.session_state:
-    st.session_state.verrijkte_termen = ""
-if "laatste_vraag" not in st.session_state:
-    st.session_state.laatste_vraag = ""
-
-if "lightbox_dossier" not in st.session_state:
-    st.session_state.lightbox_dossier = None
-if "lightbox_pagina_idx" not in st.session_state:
-    st.session_state.lightbox_pagina_idx = 0
+if "blader_paginas" not in st.session_state:
+    st.session_state.blader_paginas = []
+if "gestopt" not in st.session_state:
+    st.session_state.gestopt = False
+if "start_zoekopdracht" not in st.session_state:
+    st.session_state.start_zoekopdracht = False
+if "geselecteerde_doc_ids" not in st.session_state:
+    st.session_state.geselecteerde_doc_ids = []
+if "huidige_vraag" not in st.session_state:
+    st.session_state.huidige_vraag = ""
 
 # ------------------------------------------------------------------------------
-# 3. INTERFACE & STYLING (DONKERE OVERLAY ZOALS FOTO 1)
+# 3. STREAMLIT INTERFACE & ZIJBALK
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
-st.markdown("""
-<style>
-    .doc-card {
-        border: 1px solid #e0e0e0;
-        border-radius: 8px;
-        padding: 5px;
-        text-align: center;
-        background-color: #fcfcfc;
-        margin-bottom: 5px;
-    }
-    .doc-card img {
-        border-radius: 4px;
-        max-height: 160px;
-        object-fit: cover;
-        width: 100%;
-    }
-    .doc-title {
-        font-size: 11px;
-        font-weight: 600;
-        color: #444;
-        margin-top: 6px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
+with st.sidebar:
+    st.title("ℹ️ Help & Info")
+    with st.expander("🚨 Belangrijke informatie & Foutmeldingen"):
+        st.markdown("""
+        **1. Afbeeldingen laden niet?** Zorg dat de bestanden/map in Google Drive zijn ingesteld op **'Iedereen met de link kan bekijken'**.
 
-    /* FULLSCREEN OVERLAY CSS VOOR FOTO 1 WEERGAVE */
-    .v121-overlay-backdrop {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100vw;
-        height: 100vh;
-        background-color: #121212;
-        z-index: 999990;
-    }
-</style>
-""", unsafe_allow_html=True)
+        **2. Rood blok met foutmelding (bijv. 429 RESOURCE_EXHAUSTED)?** Deze zoekmachine maakt gebruik van de Gemini API met snelheidslimieten. Probeer het later opnieuw.
+        """)
+    with st.expander("💡 Tips voor het testen"):
+        st.markdown("""
+        * **Klikbare Tegels:** Klik op een fototegel om het document te openen.
+        * **Bladeren:** Gebruik **`←`** en **`→`** op je toetsenbord.
+        * **Sluiten:** Druk op **`ESC`**.
+        """)
 
-# ------------------------------------------------------------------------------
-# HOOFDPAGINA - BASIS WEERGAVE
-# ------------------------------------------------------------------------------
-header_col1, header_col2 = st.columns([4, 1])
-with header_col1:
+col_title, col_ver = st.columns([4, 1])
+with col_title:
     st.title("🔍 RBC Archief zoekmachine")
+with col_ver:
+    st.caption(f"**Versie:** `{APP_VERSION}` ({APP_DATE})")
+
+if MODEL_NAAM:
     st.caption(f"Actief AI-model: `{MODEL_NAAM}`")
-with header_col2:
-    st.markdown(f"<p style='text-align: right; color: #888; font-size: 13px; margin-top: 15px;'>Versie: {APP_VERSIE}</p>", unsafe_allow_html=True)
+else:
+    st.error("Kon geen werkend Gemini-model vinden.")
+    st.stop()
 
 col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='wanneer is emile delvoie overleden?',
-        height=90
+        placeholder='Bijv: wie waren de bestuursleden van de firma radio belge de construction in 1936',
+        height=100
     )
 with col2:
-    max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=20, step=5)
+    max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=15, step=5)
 
 btn_col1, btn_col2 = st.columns([2, 1])
 with btn_col1:
@@ -220,254 +163,535 @@ with btn_col1:
 with btn_col2:
     stop_button = st.button("⛔ Stop / Annuleer", type="secondary", use_container_width=True)
 
+if submit_button:
+    st.session_state.blader_paginas = []
+    st.session_state.chat_historie = []
+    st.session_state.actieve_chat = None
+    st.session_state.geselecteerde_doc_ids = []
+    st.session_state.huidige_vraag = onderzoeksvraag
+    gc.collect()
+
+    st.session_state.gestopt = False
+    st.session_state.start_zoekopdracht = True
+    st.rerun()
+
 if stop_button:
-    st.warning("⚠️ Onderzoek geannuleerd.")
+    st.session_state.gestopt = True
+    st.session_state.start_zoekopdracht = False
+    st.session_state.blader_paginas = []
+    gc.collect()
+    st.warning("⚠️ Onderzoek is direct geannuleerd.")
     st.stop()
 
-# Placeholders
-expansion_placeholder = st.empty()
-docs_placeholder = st.empty()
-rapport_placeholder = st.empty()
-
-# Helper-functie om documentenraster op te bouwen
-def toon_documenten_grid(container, bronnen, totaal_pags):
-    with container.container():
-        st.markdown("---")
-        aantal_dossiers = len(bronnen)
-        st.subheader(f"🖼️ Geselecteerde Archiefdocumenten ({aantal_dossiers} dossiers • {totaal_pags} pagina's)")
-        
-        cols = st.columns(6)
-        for idx, bron in enumerate(bronnen):
-            b_naam = bron["naam"]
-            b_id = bron["eerst_id"]
-            thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w400"
-
-            col = cols[idx % 6]
-            with col:
-                st.markdown(f"""
-                    <div class="doc-card">
-                        <img src="{thumbnail_url}" alt="{b_naam}">
-                        <div class="doc-title">{b_naam}</div>
-                    </div>
-                """, unsafe_allow_html=True)
-                
-                if st.button("👁️ Bekijk", key=f"btn_view_{idx}", use_container_width=True):
-                    st.session_state.lightbox_dossier = bron
-                    st.session_state.lightbox_pagina_idx = 0
-                    st.rerun()
-
-# Helper-functie om de query expansion op te bouwen
-def toon_expansion(container, vraag, termen):
-    with container.container():
-        with st.expander("🧠 Bekijk de door Gemini verrijkte zoektermen (Query Expansion)", expanded=True):
-            st.write(f"**Originele vraag:** {vraag}")
-            st.write(f"**Verrijkte trefwoorden & varianten:** {termen}")
-
 # ------------------------------------------------------------------------------
-# 4. ONDERZOEKSLOGICA
+# 4. RANKING EN SCORING (VERBETERT VOOR EXACTE STAATSBLAD-JAARTALLEN)
 # ------------------------------------------------------------------------------
-if submit_button:
-    if not onderzoeksvraag.strip():
+if st.session_state.start_zoekopdracht:
+    if not st.session_state.huidige_vraag.strip():
         st.warning("Voer a.u.b. een onderzoeksvraag in.")
+        st.session_state.start_zoekopdracht = False
     else:
-        st.session_state.chat_historie = []
-        st.session_state.bron_details = []
-        st.session_state.totaal_paginas = 0
-        st.session_state.laatste_vraag = onderzoeksvraag
-
-        # STAP 1: Query Expansion
-        with st.spinner("🧠 Tussenstation: Trefwoorden verzamelen..."):
-            st.session_state.verrijkte_termen = verrijk_zoekopdracht_met_gemini(ai_client, MODEL_NAAM, onderzoeksvraag)
-            
-        toon_expansion(expansion_placeholder, st.session_state.laatste_vraag, st.session_state.verrijkte_termen)
-
-        # STAP 2: Inhoudsopgave scannen
-        with st.spinner("Inhoudsopgave scannen..."):
+        with st.spinner("Stap 1/3: Inhoudsopgave (Google Sheet) scannen..."):
             try:
-                sh = gc.open(SHEET_NAAM)
+                sh = gc_drive.open(SHEET_NAAM)
                 worksheet = sh.sheet1
                 alle_records = worksheet.get_all_records()
                 data = [row for row in alle_records if str(row.get('Bestandsnaam', '')).strip()]
             except Exception as e:
-                st.error(f"Fout bij openen Google Sheet: {e}")
+                st.error(f"Kon de Google Sheet niet openen: {e}")
+                st.session_state.start_zoekopdracht = False
                 st.stop()
 
-            dossier_pagina_map = {}
+            if not data:
+                st.error("De Google Sheet bevat geen gegevens.")
+                st.session_state.start_zoekopdracht = False
+                st.stop()
+
+            vraag_norm = normaliseer_tekst(st.session_state.huidige_vraag)
+            
+            # Detecteer jaartallen in de vraag (bijv. 1936)
+            gevonden_jaren = re.findall(r'\b(19\d{2}|20\d{2})\b', vraag_norm)
+
+            is_schade_vraag = any(w in vraag_norm for w in ['schade', 'oorlogsschade', 'vergoeding', 'bedrag', 'uitgekeerd', 'frank', 'frs', 'betaald'])
+            is_boek_vraag = any(w in vraag_norm for w in ['boek', 'rutten', 'mathieu', 'delvoie', 'elektriciteitscentrale', 'geschreven'])
+            is_radio_vraag = any(w in vraag_norm for w in ['radio', 'model', 'vedette', 'auditorium', 'classic', 'standard', 'grandluxe', 'royal', 'record'])
+            is_bestuur_vraag = any(w in vraag_norm for w in ['bestuur', 'bestuurslid', 'bestuursleden', 'directeur', 'oprichting', 'staatsblad', 'statuten', 'stichter', 'aandeelhouder', 'raad van bestuur', 'firma', 'vennootschap'])
+
+            dossier_scores = {}
+
             for row in data:
                 doc_id = str(row.get('Document_ID', '')).strip()
                 b_naam = str(row.get('Bestandsnaam', '')).strip()
-                key = doc_id if doc_id else b_naam
+                datum_veld = str(row.get('Datum', '')).strip()
+                if not doc_id:
+                    doc_id = f"SINGLE_{b_naam}"
 
-                if key not in dossier_pagina_map:
-                    dossier_pagina_map[key] = {"bestanden": [], "aantal_paginas": 0}
+                pers = normaliseer_tekst(row.get('Genoemde Personen') or row.get('Genoemde personen') or '')
+                ond = normaliseer_tekst(row.get('Onderwerp (NL)') or row.get('Onderwerp') or '')
+                inhoud = normaliseer_tekst(row.get('Inhoud & Cijfers (NL)') or row.get('Inhoud & cijfers') or row.get('Inhoud') or '')
+                
+                combi_tekst = f"{doc_id.lower()} {b_naam.lower()} {datum_veld.lower()} {pers} {ond} {inhoud}"
 
-                if b_naam and b_naam not in dossier_pagina_map[key]["bestanden"]:
-                    dossier_pagina_map[key]["bestanden"].append(b_naam)
-                    dossier_pagina_map[key]["aantal_paginas"] += 1
+                score = 0
 
-            vraag_woorden = [w.strip().lower() for w in onderzoeksvraag.split() if len(w.strip()) > 3]
-            hoofd_namen = [w for w in vraag_woorden if w not in ['wanneer', 'overleden', 'wie', 'wat', 'welke', 'waar']]
+                if is_bestuur_vraag:
+                    # Basiskenmerken voor staatsbladen/akten
+                    if any(w in combi_tekst for w in ['staatsblad', 'moniteur', 'oprichting', 'statuten', 'bijlagen', 'actes', 'balans', 'jaarrekening']):
+                        score += 150
+                    if any(w in combi_tekst for w in ['bestuur', 'beheerder', 'administrateur', 'benoeming', 'raad', 'vennootschap']):
+                        score += 80
 
-            prio_pdf_ids = []
-            prio_doc_ids = []
-            overige_doc_ids = []
+                    # Matchen op specifiek jaartal (zoals 1936)
+                    for yr in gevonden_jaren:
+                        if yr in combi_tekst:
+                            score += 250  # Enorme bonus voor het exacte jaartal in staatsbladen!
 
-            for row in data:
-                doc_id_val = str(row.get('Document_ID', '')).strip()
-                b_naam_val = str(row.get('Bestandsnaam', '')).strip()
-                target_id = doc_id_val if doc_id_val else b_naam_val
+                elif is_boek_vraag:
+                    if 'rutten' in combi_tekst or 'mathieu' in combi_tekst or 'delvoie' in combi_tekst:
+                        score += 100
+                    if 'elektriciteit' in combi_tekst or 'centrale' in combi_tekst:
+                        score += 50
+                    if 'doc_0001' in doc_id.lower() or 'boek' in combi_tekst:
+                        score += 40
 
-                rij_tekst = f"{doc_id_val} {b_naam_val} {row.get('Genoemde Personen', '')} {row.get('Onderwerp (NL)', '')} {row.get('Inhoud & Cijfers (NL)', '')}".lower()
+                elif is_schade_vraag:
+                    if 'oorlogsschade' in combi_tekst or 'schadevergoeding' in combi_tekst or 'beschadiging' in combi_tekst:
+                        score += 80
+                    if '540.224' in combi_tekst or 'exploitatiemateriaal' in combi_tekst or 'ministerie' in combi_tekst:
+                        score += 60
+                    if any(naam in combi_tekst for naam in ['denijs', 'denys', 'benijs', 'gabrielle', 'hervé', 'herve']):
+                        score += 120
+                    if any(doc in doc_id.lower() for doc in ['doc_0169', 'doc_0170', 'doc_0201', 'doc_0237']):
+                        score += 150
+                    if 'totaal_16' in b_naam.lower() or 'radio-weekblad' in combi_tekst or 'annex' in b_naam.lower():
+                        score -= 50
 
-                if hoofd_namen and not any(naam in rij_tekst for naam in hoofd_namen):
-                    continue
+                elif is_radio_vraag:
+                    if b_naam.lower().endswith('.pdf'):
+                        score += 50
 
-                if target_id not in prio_pdf_ids and target_id not in prio_doc_ids and target_id not in overige_doc_ids:
-                    if "pdf" in b_naam_val.lower() or "delvoie.pdf" in target_id.lower():
-                        prio_pdf_ids.append(target_id)
-                    elif "geschiedenis" in rij_tekst or "overzicht" in rij_tekst:
-                        prio_doc_ids.append(target_id)
-                    else:
-                        overige_doc_ids.append(target_id)
+                    modellen = ['vedette', 'auditorium', 'classic', 'standard', 'grandluxe', 'onbekend']
+                    gezochte_modellen = [m for m in modellen if m in vraag_norm]
 
-            geselecteerde_doc_ids = (prio_pdf_ids + prio_doc_ids + overige_doc_ids)[:max_dossiers]
+                    for m in gezochte_modellen:
+                        if m in combi_tekst:
+                            score += 200
 
-        if not geselecteerde_doc_ids:
-            st.warning("⚠️ Geen relevante documenten gevonden voor deze naam.")
+                    if 'royal' in vraag_norm and 'royal' in combi_tekst:
+                        score += 50
+                    if 'record' in vraag_norm and 'record' in combi_tekst:
+                        score += 50
+
+                    if 'totaal_16' in b_naam.lower() or 'radiocentrale' in combi_tekst:
+                        score -= 150
+
+                else:
+                    stop_woorden = ['geef', 'naam', 'grootte', 'bedrag', 'staat', 'over', 'door', 'van', 'het', 'wat', 'weet', 'je', 'een', 'uit', 'radio', 'model', 'wie', 'waren']
+                    for woord in re.sub(r'[^\w\s]', ' ', vraag_norm).split():
+                        if len(woord) >= 3 and woord not in stop_woorden:
+                            if woord in combi_tekst:
+                                score += 30
+
+                if score > 0:
+                    dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + score
+
+            gesorteerde_dossiers = [d_id for d_id, sc in sorted(dossier_scores.items(), key=lambda x: x[1], reverse=True)]
+
+            if not gesorteerde_dossiers:
+                gesorteerde_dossiers = list(set(str(row.get('Document_ID', '')).strip() for row in data if row.get('Document_ID')))
+
+            st.session_state.geselecteerde_doc_ids = gesorteerde_dossiers[:max_dossiers]
+
+        if not st.session_state.geselecteerde_doc_ids:
+            st.warning("⚠️ Geen relevante documenten gevonden voor deze vraag.")
+            st.session_state.start_zoekopdracht = False
             st.stop()
 
-        # STAP 3: Payload ophalen
-        onderzoeks_payload = [
-            f"ONDERZOEKSVRAAG: {onderzoeksvraag}\nVERRIJKTE CONTEXT: {st.session_state.verrijkte_termen}\nBeantwoord de vraag zo nauwkeurig mogelijk. Controleer alle verstrekte PDF's en afbeeldingen op data en familienamen."
-        ]
+        sheet_dossier_data = []
+        gezochte_bestanden = []
+        
+        for row in data:
+            doc_id = str(row.get('Document_ID', '')).strip()
+            b_naam = str(row.get('Bestandsnaam', '')).strip()
+            if not doc_id:
+                doc_id = f"SINGLE_{b_naam}"
 
-        with st.spinner("Documenten en PDF's ophalen uit Drive..."):
-            for doc_id in geselecteerde_doc_ids:
-                info = dossier_pagina_map.get(doc_id, {"bestanden": [doc_id], "aantal_paginas": 1})
-                pag_count = info["aantal_paginas"]
-                st.session_state.totaal_paginas += pag_count
+            if any(doc_id.lower() == g_id.lower() or b_naam.lower() == g_id.lower() for g_id in st.session_state.geselecteerde_doc_ids):
+                sheet_dossier_data.append(row)
+                if b_naam:
+                    gezochte_bestanden.append((doc_id, b_naam.split('/')[-1]))
 
-                dossier_bestanden_lijst = []
-
-                for idx, b_naam in enumerate(info["bestanden"]):
-                    b_naam_schoon = str(b_naam).strip("'\" ")
-                    if ":" in b_naam_schoon: b_naam_schoon = b_naam_schoon.split(":", 1)[-1].strip()
-                    basis_naam = b_naam_schoon.split('/')[-1]
-
-                    query = f"name contains '{basis_naam.rsplit('.', 1)[0]}' and trashed = false"
-                    res = drive_service.files().list(q=query, fields='files(id, name, mimeType)').execute()
-                    bestanden = res.get('files', [])
-
-                    if bestanden:
-                        f = bestanden[0]
-                        b_id, b_real_naam, mime_type = f['id'], f['name'], f.get('mimeType', '')
-                        dossier_bestanden_lijst.append({"id": b_id, "bestandsnaam": b_real_naam})
-
-                        try:
-                            payload_part = laad_drive_bestand_payload(drive_service, b_id, mime_type, b_real_naam)
-                            onderzoeks_payload.append(f"\n--- DOSSIER/DOCUMENT: {doc_id} (Pagina {idx+1}/{pag_count}) ---")
-                            onderzoeks_payload.append(payload_part)
-                        except Exception as ex:
-                            st.write(f"Fout bij inladen {b_real_naam}: {ex}")
-
-                if dossier_bestanden_lijst:
-                    weergave_titel = f"{doc_id} ({pag_count} pag.)" if pag_count > 1 else doc_id
-                    st.session_state.bron_details.append({
-                        "naam": weergave_titel,
-                        "eerst_id": dossier_bestanden_lijst[0]["id"],
-                        "bestanden": dossier_bestanden_lijst
+        blader_lijst = []
+        if gezochte_bestanden:
+            batch_size = 50
+            drive_map = {}
+            for i in range(0, len(gezochte_bestanden), batch_size):
+                batch = gezochte_bestanden[i:i + batch_size]
+                namen_query = " or ".join([f"name = '{naam}'" for _, naam in batch])
+                query = f"({namen_query}) and trashed = false"
+                
+                res = drive_service.files().list(
+                    q=query, 
+                    fields='files(id, name, mimeType)',
+                    pageSize=1000
+                ).execute().get('files', [])
+                
+                for f in res:
+                    drive_map[f['name']] = f
+            
+            for doc_id, b_schoon in gezochte_bestanden:
+                if b_schoon in drive_map:
+                    f = drive_map[b_schoon]
+                    blader_lijst.append({
+                        "doc_id": doc_id, 
+                        "naam": f['name'], 
+                        "id": f['id'], 
+                        "mime": f['mimeType']
                     })
 
-        # LIVE UPDATE STAP 2
-        toon_documenten_grid(docs_placeholder, st.session_state.bron_details, st.session_state.totaal_paginas)
-
-        # STAP 4: Gemini-analyse uitvoeren
-        with st.spinner("📑 Historisch Onderzoeksrapport genereren met Gemini..."):
-            try:
-                st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
-                analyse_response = genereer_met_retry(ai_client, MODEL_NAAM, onderzoeks_payload)
-                st.session_state.chat_historie.append(("assistant", analyse_response.text))
-            except Exception as e:
-                st.error(f"Fout tijdens analyse: {e}")
+        st.session_state.blader_paginas = blader_lijst
+        st.session_state.sheet_dossier_data = sheet_dossier_data
+        st.session_state.start_zoekopdracht = False
+        st.rerun()
 
 # ------------------------------------------------------------------------------
-# 5. PASSIEVE RENDERING
+# 5. WEERGAVE VAN DE FOTOTEGELS
 # ------------------------------------------------------------------------------
-if st.session_state.verrijkte_termen and submit_button is False:
-    toon_expansion(expansion_placeholder, st.session_state.laatste_vraag, st.session_state.verrijkte_termen)
+if st.session_state.blader_paginas:
+    st.divider()
+    
+    dossiers_dict = {}
+    for p in st.session_state.blader_paginas:
+        d_id = p.get("doc_id", "Dossier_Onbekend")
+        if d_id not in dossiers_dict:
+            dossiers_dict[d_id] = []
+        dossiers_dict[d_id].append(p)
 
-if st.session_state.bron_details and submit_button is False:
-    toon_documenten_grid(docs_placeholder, st.session_state.bron_details, st.session_state.totaal_paginas)
+    for d_id in dossiers_dict:
+        dossiers_dict[d_id].sort(key=natuurlijke_sortering)
+
+    tegel_items = []
+    volgorde_ids = st.session_state.geselecteerde_doc_ids if st.session_state.geselecteerde_doc_ids else list(dossiers_dict.keys())
+
+    for d_id in volgorde_ids:
+        if d_id in dossiers_dict and dossiers_dict[d_id]:
+            pagina_lijst = dossiers_dict[d_id]
+            eerste_pagina = pagina_lijst[0].copy()
+            
+            aantal_pags = len(pagina_lijst)
+            if aantal_pags > 1:
+                eerste_pagina["display_label"] = f"{d_id} ({aantal_pags} pag.)"
+            else:
+                eerste_pagina["display_label"] = d_id
+                
+            tegel_items.append(eerste_pagina)
+
+    st.subheader(f"🖼️ Geselecteerde Archiefdocumenten ({len(tegel_items)} dossiers • {len(st.session_state.blader_paginas)} pagina's)")
+    st.caption("Klik op een tegel om het document/boek te openen in de viewer.")
+
+    tegels_json = json.dumps(tegel_items)
+    alle_dossiers_json = json.dumps(dossiers_dict)
+
+    grid_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{
+                margin: 0;
+                padding: 5px 0;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                background: transparent;
+            }}
+            .grid-container {{
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+                gap: 15px;
+                width: 100%;
+            }}
+            .tile {{
+                background: #ffffff;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+                overflow: hidden;
+                cursor: pointer;
+                transition: transform 0.2s, box-shadow 0.2s;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            }}
+            .tile:hover {{
+                transform: translateY(-3px);
+                box-shadow: 0 6px 15px rgba(0,0,0,0.15);
+                border-color: #1a73e8;
+            }}
+            .img-container {{
+                width: 100%;
+                height: 180px;
+                background-color: #f5f5f5;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                overflow: hidden;
+            }}
+            .img-container img {{
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+            }}
+            .tile-caption {{
+                padding: 10px 8px;
+                font-size: 12px;
+                font-weight: 600;
+                color: #202124;
+                text-align: center;
+                word-break: break-word;
+                line-height: 1.3;
+                width: 100%;
+                box-sizing: border-box;
+                background: #fafafa;
+                border-top: 1px solid #f0f0f0;
+            }}
+        </style>
+    </head>
+    <body>
+
+        <div class="grid-container" id="tile-grid"></div>
+
+        <script>
+            const tegels = {tegels_json};
+            const alleDossiers = {alle_dossiers_json};
+
+            function getImageUrl(fileId) {{
+                return "https://lh3.googleusercontent.com/d/" + fileId;
+            }}
+
+            function getFallbackUrl(fileId) {{
+                return "https://drive.google.com/thumbnail?id=" + fileId + "&sz=w600";
+            }}
+
+            function renderTiles() {{
+                const grid = document.getElementById('tile-grid');
+                grid.innerHTML = '';
+
+                tegels.forEach((item) => {{
+                    const tile = document.createElement('div');
+                    tile.className = 'tile';
+                    tile.onclick = () => openDriveOverlay(item.doc_id);
+
+                    const primaryUrl = getImageUrl(item.id);
+                    const fallbackUrl = getFallbackUrl(item.id);
+                    const labelTekst = item.display_label || item.doc_id || item.naam;
+
+                    tile.innerHTML = `
+                        <div class="img-container">
+                            <img src="${{primaryUrl}}" onerror="this.onerror=null; this.src='${{fallbackUrl}}';" loading="lazy" alt="${{labelTekst}}" />
+                        </div>
+                        <div class="tile-caption">${{labelTekst}}</div>
+                    `;
+                    grid.appendChild(tile);
+                }});
+            }}
+
+            function openDriveOverlay(docId) {{
+                const topDoc = window.top.document;
+                
+                const dossierPaginas = alleDossiers[docId] || [];
+                let currentIndex = 0;
+
+                const bestaandeModal = topDoc.getElementById('rbc-drive-modal');
+                if (bestaandeModal) bestaandeModal.remove();
+
+                const modal = topDoc.createElement('div');
+                modal.id = 'rbc-drive-modal';
+                modal.style.cssText = `
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100vw;
+                    height: 100vh;
+                    background-color: rgba(0, 0, 0, 0.92);
+                    backdrop-filter: blur(6px);
+                    z-index: 9999999;
+                    display: flex;
+                    flex-direction: column;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                `;
+
+                modal.innerHTML = `
+                    <div id="rbc-top-bar" style="height: 56px; background: rgba(20,20,20,0.95); display: flex; align-items: center; padding: 0 20px; color: white; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                        <button id="rbc-close-btn" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-right: 15px;" title="Sluiten (ESC)">✕</button>
+                        <div id="rbc-title-info" style="font-size: 15px; color: #e8eaed; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Laden...</div>
+                    </div>
+                    <div style="position: relative; flex: 1; width: 100%; height: calc(100vh - 56px); display: flex; align-items: center; justify-content: center; overflow: hidden;">
+                        <img id="rbc-img" style="max-width: 90%; max-height: 90%; object-fit: contain; border-radius: 4px; box-shadow: 0 0 25px rgba(0,0,0,0.8); transition: opacity 0.2s;" src="" />
+                        <div id="rbc-prev-btn" style="position: absolute; top: 50%; left: 20px; transform: translateY(-50%); width: 48px; height: 48px; background: rgba(30,30,30,0.8); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; font-size: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; z-index: 10;" title="Vorige pagina">‹</div>
+                        <div id="rbc-next-btn" style="position: absolute; top: 50%; right: 20px; transform: translateY(-50%); width: 48px; height: 48px; background: rgba(30,30,30,0.8); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; font-size: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; z-index: 10;" title="Volgende pagina">›</div>
+                    </div>
+                `;
+
+                topDoc.body.appendChild(modal);
+                topDoc.body.style.overflow = 'hidden';
+
+                const imgEl = topDoc.getElementById('rbc-img');
+                const titleInfo = topDoc.getElementById('rbc-title-info');
+                const closeBtn = topDoc.getElementById('rbc-close-btn');
+                const prevBtn = topDoc.getElementById('rbc-prev-btn');
+                const nextBtn = topDoc.getElementById('rbc-next-btn');
+
+                function updateViewer() {{
+                    if (dossierPaginas.length === 0) return;
+                    const item = dossierPaginas[currentIndex];
+                    
+                    imgEl.style.opacity = '0.3';
+                    const mainSrc = getImageUrl(item.id);
+                    const altSrc = getFallbackUrl(item.id);
+                    
+                    imgEl.onerror = () => {{ imgEl.onerror = null; imgEl.src = altSrc; }};
+                    imgEl.src = mainSrc;
+                    imgEl.onload = () => {{ imgEl.style.opacity = '1'; }};
+
+                    titleInfo.innerText = `${{item.naam}}  •  Pagina ${{currentIndex + 1}} van ${{dossierPaginas.length}}`;
+
+                    prevBtn.style.opacity = (currentIndex === 0) ? '0.2' : '1';
+                    prevBtn.style.pointerEvents = (currentIndex === 0) ? 'none' : 'auto';
+
+                    nextBtn.style.opacity = (currentIndex === dossierPaginas.length - 1) ? '0.2' : '1';
+                    nextBtn.style.pointerEvents = (currentIndex === dossierPaginas.length - 1) ? 'none' : 'auto';
+                }}
+
+                function sluitModal() {{
+                    modal.remove();
+                    topDoc.body.style.overflow = 'auto';
+                    topDoc.removeEventListener('keydown', keyHandler);
+                }}
+
+                function keyHandler(e) {{
+                    if (e.key === 'Escape') sluitModal();
+                    if (e.key === 'ArrowLeft' && currentIndex > 0) {{ currentIndex--; updateViewer(); }}
+                    if (e.key === 'ArrowRight' && currentIndex < dossierPaginas.length - 1) {{ currentIndex++; updateViewer(); }}
+                }}
+
+                closeBtn.onclick = sluitModal;
+                prevBtn.onclick = () => {{ if (currentIndex > 0) {{ currentIndex--; updateViewer(); }} }};
+                nextBtn.onclick = () => {{ if (currentIndex < dossierPaginas.length - 1) {{ currentIndex--; updateViewer(); }} }};
+
+                topDoc.addEventListener('keydown', keyHandler);
+
+                updateViewer();
+            }}
+
+            renderTiles();
+        </script>
+    </body>
+    </html>
+    """
+
+    aantal_tegels = len(tegel_items)
+    aantal_rijen = math.ceil(aantal_tegels / 5) if aantal_tegels > 0 else 1
+    berekende_hoogte = (aantal_rijen * 240) + 15
+
+    components.html(grid_html, height=berekende_hoogte, scrolling=False)
+
+# ------------------------------------------------------------------------------
+# 6. GECOMBINEERDE VISUELE & METADATA ANALYSE VIA GEMINI
+# ------------------------------------------------------------------------------
+if st.session_state.blader_paginas and not st.session_state.chat_historie:
+    with st.spinner("Stap 3/3: Historische en visuele analyse uitvoeren via Gemini..."):
+        try:
+            onderzoeks_prompt = f"""
+Jij bent een financieel-historisch expert en archivaris.
+Beantwoord de onderstaande onderzoeksvraag grondig en gedetailleerd op basis van de meegeleverde originele archiefstukken (zowel tekst als afbeeldingen).
+
+ONDERZOEKSVRAAG: {st.session_state.huidige_vraag}
+
+INSTRUCTIES VOOR JE RAPPORT:
+1. Richt je specifiek op de gevraagde thema's, personen, locaties, bedragen, boeken, radiomodellen of documenten.
+2. Vermeld expliciet ÁLLE betrokken namen van personen (bijv. eisers, gemachtigden, bestuurders, oprichters) én de officiële bedrijfsnamen.
+3. Als de vraag gaat over bestuursleden of de raad van bestuur, vermeld dan hun specifieke functies (voorzitter, beheerder, afgevaardigd bestuurder) indien bekend.
+4. Structureer je antwoord helder met duidelijke kopjes en een conclusie.
+5. Citeer steeds de bestandsnaam (bijv. 'DOC_0170', 'DOC_0516' of de specifieke PDF-naam) wanneer je naar specifieke informatie verwijst.
+"""
+            payload = [onderzoeks_prompt]
+            sheet_data = getattr(st.session_state, 'sheet_dossier_data', [])
+
+            # 1. Voeg Sheet metadata toe
+            tekst_gebundeld = f"\n--- REGISTERGEGEVENS VAN SELECTIE ({len(sheet_data)} RECORD(S)) ---\n"
+            for idx, r in enumerate(sheet_data, start=1):
+                doc_id = r.get('Document_ID', '')
+                b_naam = r.get('Bestandsnaam', '')
+                pers = r.get('Genoemde Personen', '') or r.get('Genoemde personen', '')
+                ond = r.get('Onderwerp (NL)', '') or r.get('Onderwerp', '')
+                inhoud = r.get('Inhoud & Cijfers (NL)', '') or r.get('Inhoud & cijfers (NL)', '') or r.get('Inhoud', '')
+
+                tekst_gebundeld += f"\n[Item {idx}] Doc_ID: {doc_id} | Bestand: {b_naam}\n"
+                if pers: tekst_gebundeld += f"  - Personen: {pers}\n"
+                if ond: tekst_gebundeld += f"  - Onderwerp: {ond}\n"
+                if inhoud: tekst_gebundeld += f"  - Inhoud: {inhoud}\n"
+
+            payload.append(tekst_gebundeld)
+
+            # 2. Voeg de afbeeldingen gecontroleerd toe
+            max_fotos = 15
+            geüploade_fotos = 0
+
+            for item in st.session_state.blader_paginas:
+                if geüploade_fotos >= max_fotos:
+                    break
+                try:
+                    req = drive_service.files().get_media(fileId=item['id'])
+                    f_data = req.execute()
+                    
+                    if item.get('mime') == 'application/pdf' or item['naam'].lower().endswith('.pdf'):
+                        pdf_part = types.Part.from_bytes(data=f_data, mime_type='application/pdf')
+                        payload.append(f"\n--- ORIGINELE PDF: {item['naam']} ---")
+                        payload.append(pdf_part)
+                        geüploade_fotos += 1
+                    else:
+                        img = Image.open(io.BytesIO(f_data))
+                        if img.mode != 'RGB':
+                            img = img.convert('RGB')
+                        
+                        img.thumbnail((600, 600))
+                        img_byte_arr = io.BytesIO()
+                        img.save(img_byte_arr, format='JPEG', quality=65)
+
+                        img_part = types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/jpeg')
+                        payload.append(f"\n--- ORIGINELE AFBEELDING: {item['naam']} ---")
+                        payload.append(img_part)
+                        geüploade_fotos += 1
+                        
+                        del img; del f_data; del img_byte_arr
+                except Exception as img_err:
+                    continue
+
+            st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
+            analyse_response = genereer_met_retry(ai_client, MODEL_NAAM, payload)
+            st.session_state.chat_historie.append(("assistant", analyse_response.text))
+            gc.collect()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Er is een fout opgetreden bij de verwerking door Gemini: {e}")
 
 if st.session_state.chat_historie:
-    with rapport_placeholder.container():
-        st.markdown("---")
-        st.subheader("📑 Historisch Onderzoeksrapport")
+    st.divider()
+    st.subheader("📑 Historisch Onderzoeksrapport")
+    
+    for rol, tekst in st.session_state.chat_historie:
+        with st.chat_message(rol):
+            st.write(tekst)
 
-        for rol, tekst in st.session_state.chat_historie:
-            with st.chat_message(rol):
-                st.write(tekst)
-
-        if vervolgvraag := st.chat_input("Stel een vervolgvraag over dit rapport..."):
-            st.session_state.chat_historie.append(("user", vervolgvraag))
-            with st.chat_message("user"):
-                st.write(vervolgvraag)
-
-            with st.chat_message("assistant"):
-                with st.spinner("Analyseren..."):
-                    try:
-                        response = st.session_state.actieve_chat.send_message(vervolgvraag)
-                        st.write(response.text)
-                        st.session_state.chat_historie.append(("assistant", response.text))
-                    except Exception as e:
-                        st.error(f"Fout bij verwerken vervolgvraag: {e}")
-
-# ------------------------------------------------------------------------------
-# LIGHTBOX OVERLAY RENDERING (EXACT ZOALS FOTO 1)
-# ------------------------------------------------------------------------------
-if st.session_state.lightbox_dossier:
-    dossier = st.session_state.lightbox_dossier
-    bestanden = dossier["bestanden"]
-    totaal_pags = len(bestanden)
-    curr_idx = st.session_state.lightbox_pagina_idx
-    actief_bestand = bestanden[curr_idx]
-
-    # Haal base64 data op voor directe weergave zonder timeout
-    img_b64 = haal_afbeelding_base64(actief_bestand["id"])
-    img_src = f"data:image/jpeg;base64,{img_b64}" if img_b64 else f"https://drive.google.com/thumbnail?id={actief_bestand['id']}&sz=w1600"
-
-    # Donkere Achtergrond
-    st.markdown('<div class="v121-overlay-backdrop"></div>', unsafe_allow_html=True)
-
-    # Top balk (Zwart met titel en sluitknop)
-    top_col1, top_col2, top_col3 = st.columns([6, 2, 1])
-    with top_col1:
-        st.markdown(f"<span style='color: #fff; font-weight: bold;'>📄 {actief_bestand['bestandsnaam']}</span>", unsafe_allow_html=True)
-    with top_col2:
-        st.markdown(f"<span style='color: #aaa;'>Pagina {curr_idx + 1} van {totaal_pags}</span>", unsafe_allow_html=True)
-    with top_col3:
-        if st.button("✕ Sluiten", key="v121_close_btn", type="primary", use_container_width=True):
-            st.session_state.lightbox_dossier = None
-            st.rerun()
-
-    # Middengebied: Navigatiepijlen + Afbeelding
-    nav_col1, img_col, nav_col2 = st.columns([1, 10, 1])
-
-    with nav_col1:
-        st.markdown("<div style='height: 35vh;'></div>", unsafe_allow_html=True)
-        if st.button("◀", key="v121_prev_btn", use_container_width=True, disabled=(curr_idx == 0)):
-            st.session_state.lightbox_pagina_idx -= 1
-            st.rerun()
-
-    with img_col:
-        st.markdown(f"""
-            <div style="text-align: center; margin-top: 10px;">
-                <img src="{img_src}" style="max-height: 75vh; max-width: 100%; border-radius: 4px; box-shadow: 0 0 20px rgba(0,0,0,0.8);">
-            </div>
-        """, unsafe_allow_html=True)
-
-    with nav_col2:
-        st.markdown("<div style='height: 35vh;'></div>", unsafe_allow_html=True)
-        if st.button("▶", key="v121_next_btn", use_container_width=True, disabled=(curr_idx == totaal_pags - 1)):
-            st.session_state.lightbox_pagina_idx += 1
-            st.rerun()
+    if vervolgvraag := st.chat_input("Stel een vervolgvraag over dit rapport of boek..."):
+        st.session_state.chat_historie.append(("user", vervolgvraag))
+        with st.chat_message("user"):
+            st.write(vervolgvraag)
+            
+        with st.chat_message("assistant"):
+            with st.spinner("Analyseren..."):
+                try:
+                    response = st.session_state.actieve_chat.send_message(vervolgvraag)
+                    st.write(response.text)
+                    st.session_state.chat_historie.append(("assistant", response.text))
+                except Exception as e:
+                    st.error(f"Fout bij verwerken vervolgvraag: {e}")

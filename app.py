@@ -14,16 +14,17 @@ from google.genai import types
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v1.1.4
+# Versie: v1.1.5
 # Datum: September 2026
 #
 # UPDATE:
-# - Ingebouwde Pagina Viewer Overlay (st.dialog):
-#   Bij het klikken op een dossiertegel opent een overlay waarin direct kan worden
-#   gebladerd door alle pagina's van het dossier ("Pagina X van Y") met navigatiepijlen.
+# - Volledig herstel van de Fullscreen Lightbox Overlay uit v3.8.1:
+#   * Zwarte, licht doorschijnende achtergrond over de hele pagina.
+#   * Navigatiepijlen (Vorige/Volgende) direct links en rechts naast de foto.
+#   * Bovenaan duidelijke paginateller en sluitknop.
 # ==============================================================================
 
-APP_VERSIE = "v1.1.4 (2026)"
+APP_VERSIE = "v1.1.5 (2026)"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
@@ -131,14 +132,14 @@ if "verrijkte_termen" not in st.session_state:
 if "laatste_vraag" not in st.session_state:
     st.session_state.laatste_vraag = ""
 
-# Session state voor de Viewer Overlay
-if "bekijk_dossier" not in st.session_state:
-    st.session_state.bekijk_dossier = None
-if "viewer_pagina_idx" not in st.session_state:
-    st.session_state.viewer_pagina_idx = 0
+# Session state voor de Fullscreen Lightbox Overlay
+if "lightbox_dossier" not in st.session_state:
+    st.session_state.lightbox_dossier = None
+if "lightbox_pagina_idx" not in st.session_state:
+    st.session_state.lightbox_pagina_idx = 0
 
 # ------------------------------------------------------------------------------
-# 3. INTERFACE (v1.1.4)
+# 3. INTERFACE (v1.1.5)
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
@@ -167,9 +168,89 @@ st.markdown("""
         overflow: hidden;
         text-overflow: ellipsis;
     }
+    /* Lightbox Fullscreen CSS Overrides */
+    .lightbox-bg {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background-color: rgba(0, 0, 0, 0.88);
+        z-index: 99999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+    }
+    .lightbox-header {
+        color: white;
+        font-size: 18px;
+        font-weight: bold;
+        margin-bottom: 15px;
+        text-align: center;
+    }
 </style>
 """, unsafe_allow_html=True)
 
+# ------------------------------------------------------------------------------
+# LIGHTBOX FULLSCREEN OVERLAY (v3.8.1 STIJL)
+# ------------------------------------------------------------------------------
+if st.session_state.lightbox_dossier:
+    dossier = st.session_state.lightbox_dossier
+    bestanden = dossier["bestanden"]
+    totaal_pags = len(bestanden)
+    curr_idx = st.session_state.lightbox_pagina_idx
+    actief_bestand = bestanden[curr_idx]
+
+    b_id = actief_bestand["id"]
+    thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w1600"
+
+    # Container overlay bovenaan het scherm
+    overlay_container = st.container()
+
+    with overlay_container:
+        st.markdown(f"""
+        <div style="background-color: rgba(15, 15, 15, 0.92); position: fixed; top:0; left:0; width:100vw; height:100vh; z-index: 999999; overflow-y: auto; padding: 25px;">
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Header met sluitknop
+        head_c1, head_c2, head_c3 = st.columns([2, 4, 1])
+        with head_c1:
+            st.markdown(f"<h3 style='color: white; margin:0;'>📄 {dossier['naam']}</h3>", unsafe_allow_html=True)
+        with head_c2:
+            st.markdown(f"<h4 style='color: #ddd; text-align: center; margin:0;'>Pagina {curr_idx + 1} van {totaal_pags}</h4>", unsafe_allow_html=True)
+        with head_c3:
+            if st.button("✖ Sluiten", key="close_lightbox", use_container_width=True):
+                st.session_state.lightbox_dossier = None
+                st.rerun()
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Middenstuk: Pijl Links - Foto - Pijl Rechts
+        col_left, col_img, col_right = st.columns([1, 8, 1])
+
+        with col_left:
+            st.markdown("<div style='height: 35vh;'></div>", unsafe_allow_html=True)
+            if st.button("◀", key="prev_pag_btn", disabled=(curr_idx == 0), use_container_width=True):
+                st.session_state.lightbox_pagina_idx -= 1
+                st.rerun()
+
+        with col_img:
+            st.image(thumbnail_url, use_container_width=True)
+
+        with col_right:
+            st.markdown("<div style='height: 35vh;'></div>", unsafe_allow_html=True)
+            if st.button("▶", key="next_pag_btn", disabled=(curr_idx == totaal_pags - 1), use_container_width=True):
+                st.session_state.lightbox_pagina_idx += 1
+                st.rerun()
+
+        st.stop()  # Stop verdere rendering zolang de overlay actief is
+
+# ------------------------------------------------------------------------------
+# HOOFDPAGINA
+# ------------------------------------------------------------------------------
 header_col1, header_col2 = st.columns([4, 1])
 with header_col1:
     st.title("🔍 RBC Archief zoekmachine")
@@ -202,41 +283,6 @@ expansion_placeholder = st.empty()
 docs_placeholder = st.empty()
 rapport_placeholder = st.empty()
 
-# ------------------------------------------------------------------------------
-# OVERLAY DIALOG (DOCUMENT VIEWER)
-# ------------------------------------------------------------------------------
-@st.dialog("📄 Archiefdocument Viewer", width="large")
-def open_dossier_dialog(dossier_data):
-    st.subheader(dossier_data["naam"])
-    bestanden = dossier_data["bestanden"]
-    totaal_pags = len(bestanden)
-    
-    current_idx = st.session_state.viewer_pagina_idx
-
-    # Navigatiebalk
-    nav_col1, nav_col2, nav_col3 = st.columns([1, 2, 1])
-    with nav_col1:
-        if st.button("⬅️ Vorige", disabled=(current_idx == 0), use_container_width=True):
-            st.session_state.viewer_pagina_idx -= 1
-            st.rerun()
-    with nav_col2:
-        st.markdown(f"<p style='text-align: center; font-weight: bold; margin-top: 8px;'>Pagina {current_idx + 1} van {totaal_pags}</p>", unsafe_allow_html=True)
-    with nav_col3:
-        if st.button("Volgende ➡️", disabled=(current_idx == totaal_pags - 1), use_container_width=True):
-            st.session_state.viewer_pagina_idx += 1
-            st.rerun()
-
-    st.markdown("---")
-    
-    actief_bestand = bestanden[current_idx]
-    b_id = actief_bestand["id"]
-    thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w1200"
-    drive_url = f"https://drive.google.com/file/d/{b_id}/view"
-
-    # Grote afbeelding
-    st.image(thumbnail_url, use_container_width=True, caption=actief_bestand["bestandsnaam"])
-    st.markdown(f"[🔗 Open bestand direct in Google Drive]({drive_url})")
-
 # Helper-functie om documentenraster op te bouwen
 def toon_documenten_grid(container, bronnen, totaal_pags):
     with container.container():
@@ -259,10 +305,9 @@ def toon_documenten_grid(container, bronnen, totaal_pags):
                     </div>
                 """, unsafe_allow_html=True)
                 
-                # Klikknop voor het openen van de overlay
                 if st.button("👁️ Bekijk", key=f"btn_view_{idx}", use_container_width=True):
-                    st.session_state.bekijk_dossier = bron
-                    st.session_state.viewer_pagina_idx = 0
+                    st.session_state.lightbox_dossier = bron
+                    st.session_state.lightbox_pagina_idx = 0
                     st.rerun()
 
 # Helper-functie om de query expansion op te bouwen
@@ -372,7 +417,6 @@ if submit_button:
                         b_id, b_real_naam, mime_type = f['id'], f['name'], f.get('mimeType', '')
                         dossier_bestanden_lijst.append({"id": b_id, "bestandsnaam": b_real_naam})
 
-                        # Alleen de bestanden aan Gemini meegeven
                         try:
                             payload_part = laad_drive_bestand_payload(drive_service, b_id, mime_type, b_real_naam)
                             onderzoeks_payload.append(f"\n--- DOSSIER/DOCUMENT: {doc_id} (Pagina {idx+1}/{pag_count}) ---")
@@ -401,11 +445,8 @@ if submit_button:
                 st.error(f"Fout tijdens analyse: {e}")
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE OVERLAY & PASSIEVE RENDERING
+# 5. PASSIEVE RENDERING
 # ------------------------------------------------------------------------------
-if st.session_state.bekijk_dossier:
-    open_dossier_dialog(st.session_state.bekijk_dossier)
-
 if st.session_state.verrijkte_termen and submit_button is False:
     toon_expansion(expansion_placeholder, st.session_state.laatste_vraag, st.session_state.verrijkte_termen)
 

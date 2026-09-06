@@ -19,7 +19,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.3.1 (Scrollbare Overlay Viewer & Strict Scoring)"
+APP_VERSION = "v1.3.2 (Full PDF Scroll & Interactive Viewer)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -268,7 +268,7 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
                 # Absolute voorkeur voor bestandsnaam matches (bijv. delvoie.pdf)
                 for ht in st.session_state.harde_naam_targets:
                     if ht in b_naam_norm:
-                        score += 500000  # Hoge prioriteit
+                        score += 500000  # Maximale prioriteit
                     if ht in pers:
                         score += 50000
                     elif ht in ond or ht in inhoud:
@@ -347,7 +347,7 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
             st.rerun()
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE VAN DE TEGELS (MET SCROLLBARE OVERLAY VIEWER)
+# 5. WEERGAVE VAN DE TEGELS (SLIMME VIEWER VOOR PDF & IMAGES)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas:
     st.divider()
@@ -440,10 +440,8 @@ if st.session_state.blader_paginas:
                         <button id="rbc-close-btn" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer; padding: 5px 10px;">✕</button>
                         <div id="rbc-title-info" style="font-size: 15px; margin-left: 15px;">Laden...</div>
                     </div>
-                    <div style="position: relative; flex: 1; display: flex; align-items: flex-start; justify-content: center; overflow-y: auto; padding: 20px 0;">
-                        <img id="rbc-img" style="width: 90%; max-width: 900px; height: auto; display: block; margin: 0 auto; box-shadow: 0 4px 20px rgba(0,0,0,0.5);" src="" />
-                        <div id="rbc-prev-btn" style="position: fixed; left: 20px; top: 50%; transform: translateY(-50%); font-size: 40px; color: white; cursor: pointer; user-select: none; background: rgba(0,0,0,0.4); padding: 10px 15px; border-radius: 50%;">‹</div>
-                        <div id="rbc-next-btn" style="position: fixed; right: 20px; top: 50%; transform: translateY(-50%); font-size: 40px; color: white; cursor: pointer; user-select: none; background: rgba(0,0,0,0.4); padding: 10px 15px; border-radius: 50%;">›</div>
+                    <div id="rbc-content-body" style="position: relative; flex: 1; display: flex; align-items: flex-start; justify-content: center; overflow-y: auto; padding: 20px 0;">
+                        <!-- Content geladen via updateViewer -->
                     </div>
                 `;
 
@@ -452,16 +450,34 @@ if st.session_state.blader_paginas:
 
                 function updateViewer() {{
                     const item = dossierPaginas[currentIndex];
-                    const imgEl = topDoc.getElementById('rbc-img');
-                    imgEl.src = getImageUrl(item.id);
+                    const container = topDoc.getElementById('rbc-content-body');
+                    const isPdf = item.naam.toLowerCase().endsWith('.pdf') || (item.mime && item.mime.includes('pdf'));
+
                     topDoc.getElementById('rbc-title-info').innerText = `${{item.naam}} (${{currentIndex + 1}}/${{dossierPaginas.length}})`;
+
+                    if (isPdf) {
+                        // PDF embedded viewer (integraal scrollbaar voor alle pagina's)
+                        container.innerHTML = `
+                            <iframe src="https://drive.google.com/file/d/${{item.id}}/preview" 
+                                    style="width: 90%; max-width: 1000px; height: 90vh; border: none; border-radius: 6px; background: #fff; box-shadow: 0 4px 20px rgba(0,0,0,0.5);">
+                            </iframe>
+                        `;
+                    } else {
+                        // Standaard image viewer voor gescande dossiers
+                        container.innerHTML = `
+                            <img id="rbc-img" style="width: 90%; max-width: 900px; height: auto; display: block; margin: 0 auto; box-shadow: 0 4px 20px rgba(0,0,0,0.5);" src="${{getImageUrl(item.id)}}" />
+                            <div id="rbc-prev-btn" style="position: fixed; left: 20px; top: 50%; transform: translateY(-50%); font-size: 40px; color: white; cursor: pointer; user-select: none; background: rgba(0,0,0,0.4); padding: 10px 15px; border-radius: 50%;">‹</div>
+                            <div id="rbc-next-btn" style="position: fixed; right: 20px; top: 50%; transform: translateY(-50%); font-size: 40px; color: white; cursor: pointer; user-select: none; background: rgba(0,0,0,0.4); padding: 10px 15px; border-radius: 50%;">›</div>
+                        `;
+
+                        topDoc.getElementById('rbc-prev-btn').onclick = () => {{ if (currentIndex > 0) {{ currentIndex--; updateViewer(); }} }};
+                        topDoc.getElementById('rbc-next-btn').onclick = () => {{ if (currentIndex < dossierPaginas.length - 1) {{ currentIndex++; updateViewer(); }} }};
+                    }
                 }}
 
                 function sluitModal() {{ modal.remove(); topDoc.body.style.overflow = 'auto'; }}
 
                 topDoc.getElementById('rbc-close-btn').onclick = sluitModal;
-                topDoc.getElementById('rbc-prev-btn').onclick = () => {{ if (currentIndex > 0) {{ currentIndex--; updateViewer(); }} }};
-                topDoc.getElementById('rbc-next-btn').onclick = () => {{ if (currentIndex < dossierPaginas.length - 1) {{ currentIndex++; updateViewer(); }} }};
 
                 updateViewer();
             }}

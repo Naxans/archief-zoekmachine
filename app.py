@@ -14,16 +14,16 @@ from google.genai import types
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v1.1.6
+# Versie: v1.1.7
 # Datum: September 2026
 #
 # UPDATE:
-# - Fix vastloper overlay: Gebruik van st.dialog (native modal) om vastlopen 
-#   en reboots te voorkomen.
-# - Navigatieknoppen (Vorige / Volgende) en paginateller direct boven de afbeelding.
+# - Exact Google Drive Preview-ontwerp met donkere/doorschijnende overlay.
+# - Navigatiepijlen zweven direct links en rechts op de foto.
+# - 100% stabiele Streamlit-interactie zonder vastlopers of reboots.
 # ==============================================================================
 
-APP_VERSIE = "v1.1.6 (2026)"
+APP_VERSIE = "v1.1.7 (2026)"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
@@ -137,7 +137,7 @@ if "viewer_pagina_idx" not in st.session_state:
     st.session_state.viewer_pagina_idx = 0
 
 # ------------------------------------------------------------------------------
-# 3. INTERFACE (v1.1.6)
+# 3. INTERFACE & FULLSCREEN DRIVE STYLING
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
@@ -166,41 +166,90 @@ st.markdown("""
         overflow: hidden;
         text-overflow: ellipsis;
     }
+
+    /* GOOGLE DRIVE FULLSCREEN OVERLAY STYLING OVERRIDE */
+    div[data-testid="stDialog"] > div {
+        background-color: rgba(18, 18, 18, 0.92) !important;
+        border: none !important;
+        max-width: 98vw !important;
+        width: 98vw !important;
+        height: 94vh !important;
+        margin: 0 auto !important;
+        border-radius: 12px !important;
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.7) !important;
+    }
+
+    div[data-testid="stDialog"] header {
+        display: none !important;
+    }
+
+    .drive-nav-btn button {
+        background-color: rgba(255, 255, 255, 0.15) !important;
+        color: white !important;
+        border: 1px solid rgba(255, 255, 255, 0.3) !important;
+        border-radius: 50% !important;
+        width: 55px !important;
+        height: 55px !important;
+        font-size: 22px !important;
+        line-height: 1 !important;
+        transition: all 0.2s ease;
+    }
+
+    .drive-nav-btn button:hover {
+        background-color: rgba(255, 255, 255, 0.35) !important;
+        border-color: #fff !important;
+        transform: scale(1.08);
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
-# NATIVE STREAMLIT DIALOG (GEEN CSS BUG OF REBOOT RISICO)
+# GOOGLE DRIVE LIGHTBOX VIEWER
 # ------------------------------------------------------------------------------
-@st.dialog("📄 Archiefdocument Viewer", width="large")
-def open_dossier_dialog(dossier_data):
+@st.dialog("Drive Viewer", width="large")
+def open_drive_lightbox(dossier_data):
     bestanden = dossier_data["bestanden"]
     totaal_pags = len(bestanden)
     current_idx = st.session_state.viewer_pagina_idx
 
-    st.markdown(f"### {dossier_data['naam']}")
-
-    # Navigatiebalk boven de foto
-    nav_col1, nav_col2, nav_col3 = st.columns([1, 2, 1])
-    with nav_col1:
-        if st.button("⬅️ Vorige pagina", key="dlg_prev", disabled=(current_idx == 0), use_container_width=True):
-            st.session_state.viewer_pagina_idx -= 1
-            st.rerun()
-    with nav_col2:
-        st.markdown(f"<p style='text-align: center; font-weight: bold; margin-top: 8px; font-size: 16px;'>Pagina {current_idx + 1} van {totaal_pags}</p>", unsafe_allow_html=True)
-    with nav_col3:
-        if st.button("Volgende pagina ➡️", key="dlg_next", disabled=(current_idx == totaal_pags - 1), use_container_width=True):
-            st.session_state.viewer_pagina_idx += 1
+    # Google Drive Stijl Bovenbalk (Titel, Paginateller & Sluiten)
+    top_c1, top_c2, top_c3 = st.columns([4, 2, 1])
+    with top_c1:
+        st.markdown(f"<span style='color: #eee; font-size: 16px; font-weight: 500;'>📄 {dossier_data['naam']}</span>", unsafe_allow_html=True)
+    with top_c2:
+        st.markdown(f"<span style='color: #aaa; font-size: 14px;'>Pagina {current_idx + 1} van {totaal_pags}</span>", unsafe_allow_html=True)
+    with top_c3:
+        if st.button("✕ Sluiten", key="close_drive_modal", use_container_width=True):
+            st.session_state.bekijk_dossier = None
             st.rerun()
 
-    st.markdown("---")
-    
+    st.markdown("<hr style='margin: 8px 0 15px 0; border-color: #333;'>", unsafe_allow_html=True)
+
+    # Middenstuk: Linkerpijl - Grote Afbeelding - Rechterpijl
+    pijl_l, img_col, pijl_r = st.columns([1, 10, 1])
+
     actief_bestand = bestanden[current_idx]
     b_id = actief_bestand["id"]
     thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w1600"
 
-    # Afbeelding weergeven
-    st.image(thumbnail_url, use_container_width=True, caption=actief_bestand["bestandsnaam"])
+    with pijl_l:
+        st.markdown("<div style='height: 30vh;'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="drive-nav-btn">', unsafe_allow_html=True)
+        if st.button("◀", key="drive_prev", disabled=(current_idx == 0)):
+            st.session_state.viewer_pagina_idx -= 1
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with img_col:
+        st.image(thumbnail_url, use_container_width=True)
+
+    with pijl_r:
+        st.markdown("<div style='height: 30vh;'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="drive-nav-btn">', unsafe_allow_html=True)
+        if st.button("▶", key="drive_next", disabled=(current_idx == totaal_pags - 1)):
+            st.session_state.viewer_pagina_idx += 1
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
 # HOOFDPAGINA
@@ -402,7 +451,7 @@ if submit_button:
 # 5. WEERGAVE OVERLAY & PASSIEVE RENDERING
 # ------------------------------------------------------------------------------
 if st.session_state.bekijk_dossier:
-    open_dossier_dialog(st.session_state.bekijk_dossier)
+    open_drive_lightbox(st.session_state.bekijk_dossier)
 
 if st.session_state.verrijkte_termen and submit_button is False:
     toon_expansion(expansion_placeholder, st.session_state.laatste_vraag, st.session_state.verrijkte_termen)

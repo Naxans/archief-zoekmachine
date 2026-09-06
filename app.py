@@ -7,6 +7,7 @@ import json
 import re
 import gc
 import math
+from string import Template
 import streamlit as st
 import streamlit.components.v1 as components
 from PIL import Image
@@ -19,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.3.2 (Full PDF Scroll & Interactive Viewer)"
+APP_VERSION = "v1.3.3 (Fixed SyntaxError & PDF Scroll)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -265,16 +266,14 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
 
                 score = 0
 
-                # Absolute voorkeur voor bestandsnaam matches (bijv. delvoie.pdf)
                 for ht in st.session_state.harde_naam_targets:
                     if ht in b_naam_norm:
-                        score += 500000  # Maximale prioriteit
+                        score += 500000
                     if ht in pers:
                         score += 50000
                     elif ht in ond or ht in inhoud:
                         score += 10000
 
-                # Context versterking
                 if score > 0:
                     for term in st.session_state.uitgebreide_zoektermen:
                         if term in combi_tekst:
@@ -283,7 +282,6 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
                 if score > 0:
                     dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + score
 
-            # Sorteer strikt aflopend op score
             gesorteerde_dossiers = [d_id for d_id, sc in sorted(dossier_scores.items(), key=lambda x: x[1], reverse=True)]
 
             if not gesorteerde_dossiers:
@@ -383,50 +381,47 @@ if st.session_state.blader_paginas:
     st.subheader(f"🖼️ Geselecteerde Archiefdocumenten ({len(tegel_items)} dossiers • {len(st.session_state.blader_paginas)} bestanden)")
     st.caption("Klik op een tegel om het document te bekijken.")
 
-    tegels_json = json.dumps(tegel_items)
-    alle_dossiers_json = json.dumps(dossiers_dict)
-
-    grid_html = f"""
+    html_template = Template("""
     <!DOCTYPE html>
     <html>
     <head>
         <style>
-            body {{ margin: 0; padding: 5px 0; font-family: sans-serif; background: transparent; }}
-            .grid-container {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; width: 100%; }}
-            .tile {{ background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; cursor: pointer; transition: transform 0.2s; display: flex; flex-direction: column; align-items: center; overflow: hidden; }}
-            .tile:hover {{ transform: translateY(-3px); border-color: #1a73e8; }}
-            .img-container {{ width: 100%; height: 180px; background-color: #f5f5f5; display: flex; align-items: center; justify-content: center; overflow: hidden; }}
-            .img-container img {{ width: 100%; height: 100%; object-fit: cover; }}
-            .tile-caption {{ padding: 10px 8px; font-size: 12px; font-weight: 600; color: #202124; text-align: center; width: 100%; box-sizing: border-box; }}
+            body { margin: 0; padding: 5px 0; font-family: sans-serif; background: transparent; }
+            .grid-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; width: 100%; }
+            .tile { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; cursor: pointer; transition: transform 0.2s; display: flex; flex-direction: column; align-items: center; overflow: hidden; }
+            .tile:hover { transform: translateY(-3px); border-color: #1a73e8; }
+            .img-container { width: 100%; height: 180px; background-color: #f5f5f5; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+            .img-container img { width: 100%; height: 100%; object-fit: cover; }
+            .tile-caption { padding: 10px 8px; font-size: 12px; font-weight: 600; color: #202124; text-align: center; width: 100%; box-sizing: border-box; }
         </style>
     </head>
     <body>
         <div class="grid-container" id="tile-grid"></div>
         <script>
-            const tegels = {tegels_json};
-            const alleDossiers = {alle_dossiers_json};
+            const tegels = $tegels_json;
+            const alleDossiers = $alle_dossiers_json;
 
-            function getImageUrl(fileId) {{ return "https://lh3.googleusercontent.com/d/" + fileId; }}
-            function getFallbackUrl(fileId) {{ return "https://drive.google.com/thumbnail?id=" + fileId + "&sz=w600"; }}
+            function getImageUrl(fileId) { return "https://lh3.googleusercontent.com/d/" + fileId; }
+            function getFallbackUrl(fileId) { return "https://drive.google.com/thumbnail?id=" + fileId + "&sz=w600"; }
 
-            function renderTiles() {{
+            function renderTiles() {
                 const grid = document.getElementById('tile-grid');
                 grid.innerHTML = '';
-                tegels.forEach((item) => {{
+                tegels.forEach((item) => {
                     const tile = document.createElement('div');
                     tile.className = 'tile';
                     tile.onclick = () => openDriveOverlay(item.doc_id);
                     tile.innerHTML = `
                         <div class="img-container">
-                            <img src="${{getImageUrl(item.id)}}" onerror="this.onerror=null; this.src='${{getFallbackUrl(item.id)}}';" loading="lazy" />
+                            <img src="$${getImageUrl(item.id)}" onerror="this.onerror=null; this.src='$${getFallbackUrl(item.id)}';" loading="lazy" />
                         </div>
-                        <div class="tile-caption">${{item.display_label || item.doc_id}}</div>
+                        <div class="tile-caption">$${item.display_label || item.doc_id}</div>
                     `;
                     grid.appendChild(tile);
-                }});
-            }}
+                });
+            }
 
-            function openDriveOverlay(docId) {{
+            function openDriveOverlay(docId) {
                 const topDoc = window.top.document;
                 const dossierPaginas = alleDossiers[docId] || [];
                 let currentIndex = 0;
@@ -441,51 +436,53 @@ if st.session_state.blader_paginas:
                         <div id="rbc-title-info" style="font-size: 15px; margin-left: 15px;">Laden...</div>
                     </div>
                     <div id="rbc-content-body" style="position: relative; flex: 1; display: flex; align-items: flex-start; justify-content: center; overflow-y: auto; padding: 20px 0;">
-                        <!-- Content geladen via updateViewer -->
                     </div>
                 `;
 
                 topDoc.body.appendChild(modal);
                 topDoc.body.style.overflow = 'hidden';
 
-                function updateViewer() {{
+                function updateViewer() {
                     const item = dossierPaginas[currentIndex];
                     const container = topDoc.getElementById('rbc-content-body');
                     const isPdf = item.naam.toLowerCase().endsWith('.pdf') || (item.mime && item.mime.includes('pdf'));
 
-                    topDoc.getElementById('rbc-title-info').innerText = `${{item.naam}} (${{currentIndex + 1}}/${{dossierPaginas.length}})`;
+                    topDoc.getElementById('rbc-title-info').innerText = `$${item.naam} ($${currentIndex + 1}/$${dossierPaginas.length})`;
 
                     if (isPdf) {
-                        // PDF embedded viewer (integraal scrollbaar voor alle pagina's)
                         container.innerHTML = `
-                            <iframe src="https://drive.google.com/file/d/${{item.id}}/preview" 
+                            <iframe src="https://drive.google.com/file/d/$${item.id}/preview" 
                                     style="width: 90%; max-width: 1000px; height: 90vh; border: none; border-radius: 6px; background: #fff; box-shadow: 0 4px 20px rgba(0,0,0,0.5);">
                             </iframe>
                         `;
                     } else {
-                        // Standaard image viewer voor gescande dossiers
                         container.innerHTML = `
-                            <img id="rbc-img" style="width: 90%; max-width: 900px; height: auto; display: block; margin: 0 auto; box-shadow: 0 4px 20px rgba(0,0,0,0.5);" src="${{getImageUrl(item.id)}}" />
+                            <img id="rbc-img" style="width: 90%; max-width: 900px; height: auto; display: block; margin: 0 auto; box-shadow: 0 4px 20px rgba(0,0,0,0.5);" src="$${getImageUrl(item.id)}" />
                             <div id="rbc-prev-btn" style="position: fixed; left: 20px; top: 50%; transform: translateY(-50%); font-size: 40px; color: white; cursor: pointer; user-select: none; background: rgba(0,0,0,0.4); padding: 10px 15px; border-radius: 50%;">‹</div>
                             <div id="rbc-next-btn" style="position: fixed; right: 20px; top: 50%; transform: translateY(-50%); font-size: 40px; color: white; cursor: pointer; user-select: none; background: rgba(0,0,0,0.4); padding: 10px 15px; border-radius: 50%;">›</div>
                         `;
 
-                        topDoc.getElementById('rbc-prev-btn').onclick = () => {{ if (currentIndex > 0) {{ currentIndex--; updateViewer(); }} }};
-                        topDoc.getElementById('rbc-next-btn').onclick = () => {{ if (currentIndex < dossierPaginas.length - 1) {{ currentIndex++; updateViewer(); }} }};
+                        topDoc.getElementById('rbc-prev-btn').onclick = () => { if (currentIndex > 0) { currentIndex--; updateViewer(); } };
+                        topDoc.getElementById('rbc-next-btn').onclick = () => { if (currentIndex < dossierPaginas.length - 1) { currentIndex++; updateViewer(); } };
                     }
-                }}
+                }
 
-                function sluitModal() {{ modal.remove(); topDoc.body.style.overflow = 'auto'; }}
+                function sluitModal() { modal.remove(); topDoc.body.style.overflow = 'auto'; }
 
                 topDoc.getElementById('rbc-close-btn').onclick = sluitModal;
 
                 updateViewer();
-            }}
+            }
             renderTiles();
         </script>
     </body>
     </html>
-    """
+    """)
+
+    grid_html = html_template.substitute(
+        tegels_json=json.dumps(tegel_items),
+        alle_dossiers_json=json.dumps(dossiers_dict)
+    )
 
     aantal_tegels = len(tegel_items)
     aantal_rijen = math.ceil(aantal_tegels / 5) if aantal_tegels > 0 else 1

@@ -13,20 +13,21 @@ from google.genai import types
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v1.0.4
+# Versie: v1.0.5
 # Datum: September 2026
 #
 # CHRONOLOGISCHE VERSIE-HISTORIE:
 # - v3.8.1: Oorspronkelijke schermlayout met tegel-grid van 6 kolommen.
 # - v1.0.0: Introductie van Query Expansion (AI-tussenstation).
-# - v1.0.2: Herstel van de v3.8.1 visualisatie (6-koloms tegel-grid & titel-layout).
 # - v1.0.3: Her-introductie van de controle-expander voor verrijkte trefwoorden.
-# - v1.0.4: FIX: Zoekfilter versoepeld. Primaire focus op persoonsnamen/entiteiten
-#           zodat overtollige synoniemen (zoals 'sterfakte') geldige hits
-#           voor een persoon niet meer blokkeren.
+# - v1.0.4: Poging tot versoepeling van het zoekfilter.
+# - v1.0.5: GELAAGDE FILTERSTRATEGIE:
+#           Stap 1: Zoek documenten van de persoon (verplichte naam-match).
+#           Stap 2: Prioriteer binnen die selectie de stukken met specifieke
+#                   overlijdenstermen (bijv. décès, necrologie, testament).
 # ==============================================================================
 
-APP_VERSIE = "v1.0.4 (2026)"
+APP_VERSIE = "v1.0.5 (2026)"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
@@ -94,7 +95,7 @@ De gebruiker stelt de volgende zoekvraag in ons archief: "{originele_vraag}"
 ANALYSEER EN VERRIJK DEZE ZOEKVRAAG:
 1. Vertaal namen naar hun Franse en Nederlandse varianten (bijv. Emiel <-> Emile, Charles <-> Karel, Jean <-> Jan, Jules <-> Julien).
 2. Voeg mogelijke initialen of schrijfvarianten toe (bijv. E. Delvoie, Delvoie Emile).
-3. Voeg relevante vaktermen, bedrijfsvormen of synoniemen toe in het Frans en Nederlands.
+3. Voeg relevante vaktermen, bedrijfsvormen of overlijdenssynoniemen toe in het Frans en Nederlands (bijv. overlijden, décès, mort, décédé, overleden, sterfte, necrologie, nécrologie, burgerlijke stand, état civil, familiebericht, faire-part, testament, erfenis, succession).
 
 Geef UITSLUITEND een compacte, door komma's gescheiden lijst van trefwoorden en naamvarianten terug. Geen toelichting.
 """
@@ -115,7 +116,7 @@ if "gestopt" not in st.session_state:
     st.session_state.gestopt = False
 
 # ------------------------------------------------------------------------------
-# 3. INTERFACE (v1.0.4)
+# 3. INTERFACE (v1.0.5)
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
@@ -176,7 +177,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. ONDERZOEKSLOGICA (VERBETERDE MATCHING)
+# 4. ONDERZOEKSLOGICA (GELAAGDE FILTERING - v1.0.5)
 # ------------------------------------------------------------------------------
 if submit_button:
     if not onderzoeksvraag.strip():
@@ -203,24 +204,43 @@ if submit_button:
                 st.error(f"Fout bij openen Google Sheet: {e}")
                 st.stop()
 
-            geselecteerde_doc_ids = []
+            # Bepalen welke zoektermen namen zijn vs onderwerpen
+            alle_termen = [t.strip().lower() for t in f"{onderzoeksvraag}, {verrijkte_termen}".split(',') if len(t.strip()) > 1]
             
-            # Opsplitsen van zoektermen om flexibeler te matchen op namen
-            zoek_elementen = [t.strip().lower() for t in f"{onderzoeksvraag}, {verrijkte_termen}".split(',') if len(t.strip()) > 2]
+            # Trefwoorden indelen op categorie
+            overlijden_keywords = ["overlijden", "décès", "mort", "décédé", "overleden", "sterfte", "décès de", 
+                                  "necrologie", "nécrologie", "burgerlijke stand", "état civil", "familiebericht", 
+                                  "faire-part", "testament", "erfenis", "succession", "archivalia"]
+            
+            naam_termen = [t for t in alle_termen if not any(k in t for k in overlijden_keywords)]
+            onderwerp_termen = [t for t in alle_termen if any(k in t for k in overlijden_keywords)]
 
+            # STAP 1: Filteren op documenten die MINSTENS één naamvariant bevatten
+            naam_matches = []
             for row in data:
                 doc_id_val = str(row.get('Document_ID', '')).strip()
                 b_naam_val = str(row.get('Bestandsnaam', '')).strip()
                 rij_tekst = f"{doc_id_val} {b_naam_val} {row.get('Genoemde Personen', '')} {row.get('Onderwerp (NL)', '')} {row.get('Inhoud & Cijfers (NL)', '')}".lower()
 
-                for el in zoek_elementen:
-                    if el in rij_tekst:
-                        if doc_id_val and doc_id_val not in geselecteerde_doc_ids:
-                            geselecteerde_doc_ids.append(doc_id_val)
-                        elif not doc_id_val and b_naam_val not in geselecteerde_doc_ids:
-                            geselecteerde_doc_ids.append(b_naam_val)
+                if any(naam in rij_tekst for naam in naam_termen if len(naam) > 2):
+                    target_id = doc_id_val if doc_id_val else b_naam_val
+                    if target_id and target_id not in [m['id'] for m in naam_matches]:
+                        naam_matches.append({"id": target_id, "tekst": rij_tekst})
 
-            # Slim AI-Filter als vangnet
+            # STAP 2: Binnen de naam-matches prioriteren op overlijdenstermen
+            hoge_prioriteit_ids = []
+            lage_prioriteit_ids = []
+
+            for item in naam_matches:
+                if any(kw in item["tekst"] for kw in onderwerp_termen):
+                    hoge_prioriteit_ids.append(item["id"])
+                else:
+                    lage_prioriteit_ids.append(item["id"])
+
+            # Combineer resultaten: eerst de specifieke overlijdensdocumenten, daarna eventuele overige documenten van de persoon
+            geselecteerde_doc_ids = hoge_prioriteit_ids + lage_prioriteit_ids
+
+            # STAP 3: AI-Fallback als er nog niks is gevonden
             if not geselecteerde_doc_ids:
                 dossier_samenvattingen = {}
                 for row in data:
@@ -240,17 +260,15 @@ if submit_button:
                 index_tekst = "\n".join(index_regels)[:250000]
 
                 filter_prompt = f"""
-Jij bent een hoofdarchivaris. Hier is de index van het archief:
+Jij bent een hoofdarchivaris. Hier is de index:
 {index_tekst}
 
 VRAAG VAN GEBRUIKER: "{onderzoeksvraag}"
-ZOEKTERMEN/VARIANTEN: "{verrijkte_termen}"
+ZOEKTERMEN: "{verrijkte_termen}"
 
 OPDRACHT:
-Selecteer maximaal {max_dossiers} relevante Document_ID's waarin informatie staat over de gezochte persoon of het onderwerp.
-Selecteer OOK documenten waarin de persoon genoemd wordt, zelfs als specifieke details (zoals overlijdensdatum) niet expliciet in de korte samenvatting vermeld staan.
-
-Als er absoluut niks relevant is, antwoord GEEN_MATCH.
+Selecteer maximaal {max_dossiers} relevante Document_ID's. Geef prioriteit aan documenten over overlijden, necrologie of stamboom van de gezochte persoon.
+Als niks relevant is, antwoord GEEN_MATCH.
 Geef enkel de komma-gescheiden lijst van ID's terug.
 """
                 try:
@@ -279,7 +297,7 @@ Geef enkel de komma-gescheiden lijst van ID's terug.
 
         # Drive ophalen
         with st.spinner(f"Documenten laden uit Drive ({len(eind_bestanden_lijst)} bestanden)..."):
-            onderzoeks_payload = [f"ONDERZOEKSVRAAG: {onderzoeksvraag}\nVERRIJKTE CONTEXT: {verrijkte_termen}\nBeantwoord de vraag grondig. Als er meerdere personen met dezelfde naam voorkomen (bijv. een priester en een ingenieur), vermeld dan beide overlijdensdatums."]
+            onderzoeks_payload = [f"ONDERZOEKSVRAAG: {onderzoeksvraag}\nVERRIJKTE CONTEXT: {verrijkte_termen}\nBeantwoord de vraag grondig met bronvermelding. Als er meerdere personen met dezelfde naam voorkomen (bijv. een priester en een ingenieur), vermeld dan beide overlijdensdatums als deze in de documenten te vinden zijn."]
 
             for b_naam in eind_bestanden_lijst:
                 b_naam_schoon = str(b_naam).strip("'\" ")

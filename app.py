@@ -13,20 +13,20 @@ from google.genai import types
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v1.0.3
+# Versie: v1.0.4
 # Datum: September 2026
 #
 # CHRONOLOGISCHE VERSIE-HISTORIE:
 # - v3.8.1: Oorspronkelijke schermlayout met tegel-grid van 6 kolommen.
-# - v1.0.0: Introductie van Query Expansion (AI-tussenstation) voor automatische
-#           verrijking van zoekvragen.
-# - v1.0.1: Opschoning versiestructuur.
+# - v1.0.0: Introductie van Query Expansion (AI-tussenstation).
 # - v1.0.2: Herstel van de v3.8.1 visualisatie (6-koloms tegel-grid & titel-layout).
-# - v1.0.3: Her-introductie van het uitklapmenu "Bekijk de door Gemini verrijkte
-#           zoektermen" voor visuele controle van gegenereerde synoniemen en varianten.
+# - v1.0.3: Her-introductie van de controle-expander voor verrijkte trefwoorden.
+# - v1.0.4: FIX: Zoekfilter versoepeld. Primaire focus op persoonsnamen/entiteiten
+#           zodat overtollige synoniemen (zoals 'sterfakte') geldige hits
+#           voor een persoon niet meer blokkeren.
 # ==============================================================================
 
-APP_VERSIE = "v1.0.3 (2026)"
+APP_VERSIE = "v1.0.4 (2026)"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
@@ -94,10 +94,9 @@ De gebruiker stelt de volgende zoekvraag in ons archief: "{originele_vraag}"
 ANALYSEER EN VERRIJK DEZE ZOEKVRAAG:
 1. Vertaal namen naar hun Franse en Nederlandse varianten (bijv. Emiel <-> Emile, Charles <-> Karel, Jean <-> Jan, Jules <-> Julien).
 2. Voeg mogelijke initialen of schrijfvarianten toe (bijv. E. Delvoie, Delvoie Emile).
-3. Voeg relevante vaktermen, bedrijfsvormen of synoniemen toe in het Frans en Nederlands (bijv. Radio <-> T.S.F. / Télégraphie sans fil, Staatsblad <-> Moniteur Belge, Bestuurder <-> Administrateur).
-4. Houd rekening met de chronologie van archieven: een vraag over boekjaar X (bijv. 1936) kan leiden tot publicaties in jaar X+1 (bijv. 1937 in het Staatsblad). Voeg eventueel het volgend jaar toe als relevant trefwoord.
+3. Voeg relevante vaktermen, bedrijfsvormen of synoniemen toe in het Frans en Nederlands.
 
-Geef UITSLUITEND een compacte, door komma's gescheiden lijst van trefwoorden en naamvarianten terug. Geen toelichting of extra tekst.
+Geef UITSLUITEND een compacte, door komma's gescheiden lijst van trefwoorden en naamvarianten terug. Geen toelichting.
 """
     try:
         res = genereer_met_retry(client, model, prompt)
@@ -116,11 +115,10 @@ if "gestopt" not in st.session_state:
     st.session_state.gestopt = False
 
 # ------------------------------------------------------------------------------
-# 3. INTERFACE (v3.8.1 STIJL MET CONTROLE-EXPANDER - v1.0.3)
+# 3. INTERFACE (v1.0.4)
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
-# Custom CSS voor het 6-koloms tegel-grid
 st.markdown("""
 <style>
     .doc-card {
@@ -149,7 +147,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Header conform v3.8.1 layout
 header_col1, header_col2 = st.columns([4, 1])
 with header_col1:
     st.title("🔍 RBC Archief zoekmachine")
@@ -157,7 +154,6 @@ with header_col1:
 with header_col2:
     st.markdown(f"<p style='text-align: right; color: #888; font-size: 13px; margin-top: 15px;'>Versie: {APP_VERSIE}</p>", unsafe_allow_html=True)
 
-# Invoergedeelte
 col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
@@ -180,7 +176,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. ONDERZOEKSLOGICA
+# 4. ONDERZOEKSLOGICA (VERBETERDE MATCHING)
 # ------------------------------------------------------------------------------
 if submit_button:
     if not onderzoeksvraag.strip():
@@ -190,16 +186,13 @@ if submit_button:
         st.session_state.chat_historie = []
         st.session_state.bron_details = []
 
-        # TUSSENSTATION: Zoekopdracht verrijken via Gemini
         with st.spinner("🧠 Tussenstation: Gemini analyseert taalkundige en historische varianten..."):
             verrijkte_termen = verrijk_zoekopdracht_met_gemini(ai_client, MODEL_NAAM, onderzoeksvraag)
             
-        # VISUELE CONTROLE-EXPANDER (Her-geïntroduceerd in v1.0.3)
         with st.expander("🧠 Bekijk de door Gemini verrijkte zoektermen (Query Expansion)", expanded=True):
             st.write(f"**Originele vraag:** {onderzoeksvraag}")
             st.write(f"**Verrijkte trefwoorden & varianten:** {verrijkte_termen}")
 
-        # STAP 1: Inhoudsopgave scannen uit Google Sheet
         with st.spinner("Inhoudsopgave scannen..."):
             try:
                 sh = gc.open(SHEET_NAAM)
@@ -211,17 +204,23 @@ if submit_button:
                 st.stop()
 
             geselecteerde_doc_ids = []
-            combinatie_zoektekst = f"{onderzoeksvraag} {verrijkte_termen}".lower()
+            
+            # Opsplitsen van zoektermen om flexibeler te matchen op namen
+            zoek_elementen = [t.strip().lower() for t in f"{onderzoeksvraag}, {verrijkte_termen}".split(',') if len(t.strip()) > 2]
 
             for row in data:
                 doc_id_val = str(row.get('Document_ID', '')).strip()
                 b_naam_val = str(row.get('Bestandsnaam', '')).strip()
+                rij_tekst = f"{doc_id_val} {b_naam_val} {row.get('Genoemde Personen', '')} {row.get('Onderwerp (NL)', '')} {row.get('Inhoud & Cijfers (NL)', '')}".lower()
 
-                if (doc_id_val and doc_id_val.lower() in combinatie_zoektekst) or \
-                   (b_naam_val and b_naam_val.lower() in combinatie_zoektekst):
-                    if doc_id_val and doc_id_val not in geselecteerde_doc_ids:
-                        geselecteerde_doc_ids.append(doc_id_val)
+                for el in zoek_elementen:
+                    if el in rij_tekst:
+                        if doc_id_val and doc_id_val not in geselecteerde_doc_ids:
+                            geselecteerde_doc_ids.append(doc_id_val)
+                        elif not doc_id_val and b_naam_val not in geselecteerde_doc_ids:
+                            geselecteerde_doc_ids.append(b_naam_val)
 
+            # Slim AI-Filter als vangnet
             if not geselecteerde_doc_ids:
                 dossier_samenvattingen = {}
                 for row in data:
@@ -241,13 +240,17 @@ if submit_button:
                 index_tekst = "\n".join(index_regels)[:250000]
 
                 filter_prompt = f"""
-Jij bent een hoofdarchivaris. Hier is de index:
+Jij bent een hoofdarchivaris. Hier is de index van het archief:
 {index_tekst}
 
-VRAAG: "{onderzoeksvraag}"
-ZOEKTERMEN: "{verrijkte_termen}"
+VRAAG VAN GEBRUIKER: "{onderzoeksvraag}"
+ZOEKTERMEN/VARIANTEN: "{verrijkte_termen}"
 
-Selecteer maximaal {max_dossiers} relevante Document_ID's. Als niks relevant is, antwoord GEEN_MATCH.
+OPDRACHT:
+Selecteer maximaal {max_dossiers} relevante Document_ID's waarin informatie staat over de gezochte persoon of het onderwerp.
+Selecteer OOK documenten waarin de persoon genoemd wordt, zelfs als specifieke details (zoals overlijdensdatum) niet expliciet in de korte samenvatting vermeld staan.
+
+Als er absoluut niks relevant is, antwoord GEEN_MATCH.
 Geef enkel de komma-gescheiden lijst van ID's terug.
 """
                 try:
@@ -263,6 +266,9 @@ Geef enkel de komma-gescheiden lijst van ID's terug.
             st.warning("⚠️ Geen relevante documenten gevonden.")
             st.stop()
 
+        # Beperk het aantal verwerkte dossiers tot de gekozen slider-waarde
+        geselecteerde_doc_ids = geselecteerde_doc_ids[:max_dossiers]
+
         eind_bestanden_lijst = []
         for row in data:
             doc_id = str(row.get('Document_ID', '')).strip()
@@ -273,7 +279,7 @@ Geef enkel de komma-gescheiden lijst van ID's terug.
 
         # Drive ophalen
         with st.spinner(f"Documenten laden uit Drive ({len(eind_bestanden_lijst)} bestanden)..."):
-            onderzoeks_payload = [f"ONDERZOEKSVRAAG: {onderzoeksvraag}\nVERRIJKTE CONTEXT: {verrijkte_termen}\nBeantwoord grondig met bronvermelding."]
+            onderzoeks_payload = [f"ONDERZOEKSVRAAG: {onderzoeksvraag}\nVERRIJKTE CONTEXT: {verrijkte_termen}\nBeantwoord de vraag grondig. Als er meerdere personen met dezelfde naam voorkomen (bijv. een priester en een ingenieur), vermeld dan beide overlijdensdatums."]
 
             for b_naam in eind_bestanden_lijst:
                 b_naam_schoon = str(b_naam).strip("'\" ")
@@ -314,7 +320,7 @@ Geef enkel de komma-gescheiden lijst van ID's terug.
                 st.error(f"Fout tijdens analyse: {e}")
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE RESULTATEN (TEGEL-GRID EN RAPPORT CONFORM v3.8.1)
+# 5. WEERGAVE RESULTATEN
 # ------------------------------------------------------------------------------
 if st.session_state.bron_details:
     st.markdown("---")
@@ -322,7 +328,6 @@ if st.session_state.bron_details:
     st.subheader(f"🖼️ Geselecteerde Archiefdocumenten ({aantal_dossiers} dossiers)")
     st.caption("Klik op een tegel om het document/boek te openen in de viewer.")
 
-    # Grid opbouwen in 6 kolommen (zoals v3.8.1)
     cols = st.columns(6)
     for idx, bron in enumerate(st.session_state.bron_details):
         b_naam = bron["naam"]

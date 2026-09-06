@@ -7,22 +7,24 @@ from PIL import Image
 import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 from google import genai
 from google.genai import types
 
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v1.1.0
+# Versie: v1.1.1
 # Datum: September 2026
 #
 # HERSTEL:
-# 1. Fuzzy matching op afzonderlijke namen (matcht Emiel én Emile direct).
-# 2. Ondersteuning voor PDF-documenten (zoals sites.google.com-delvoie.pdf).
-# 3. Prioritering van stamboek/geschiedenis PDF's boven losse bewijsstukken.
+# 1. Herstel van de exacte PDF-verwerkingsmodule uit v3.8.1 (inclusief robuuste 
+#    MediaIoBaseDownload streaming en native application/pdf payload).
+# 2. Directe Drive File View (/view) hersteld.
+# 3. Slimme fuzzy-matching op persoonsnamen (matcht 'Emiel' en 'Emile').
 # ==============================================================================
 
-APP_VERSIE = "v1.1.0 (2026)"
+APP_VERSIE = "v1.1.1 (2026)"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
@@ -53,7 +55,7 @@ except Exception as e:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 2. CONFIGURATIE & HELPER FUNCTIES
+# 2. CONFIGURATIE & HELPER FUNCTIES (PDF ENGINE UIT V3.8.1)
 # ------------------------------------------------------------------------------
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
@@ -81,6 +83,34 @@ def genereer_met_retry(client, model, contents, max_retries=4):
                     time.sleep(15 * (poging + 1))
                     continue
             raise e
+
+# --- PDF EN AFBEELDING VERWERKINGS ENGINE UIT V3.8.1 ---
+def laad_drive_bestand_payload(drive_service, file_id, mime_type, file_name):
+    """
+    Overgenomen uit v3.8.1: Robuuste download via MediaIoBaseDownload voor 
+    zowel grote PDF-bestanden als afbeeldingsbestanden.
+    """
+    request = drive_service.files().get_media(fileId=file_id)
+    fh = io.BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done:
+        status, done = downloader.next_chunk()
+    
+    file_bytes = fh.getvalue()
+
+    if "pdf" in mime_type.lower() or file_name.lower().endswith(".pdf"):
+        # Native PDF payload volgens v3.8.1 specificatie
+        return types.Part.from_bytes(data=file_bytes, mime_type='application/pdf')
+    else:
+        # Afbeelding verwerking (JPEG/PNG)
+        img = Image.open(io.BytesIO(file_bytes))
+        if img.mode != 'RGB': 
+            img = img.convert('RGB')
+        img.thumbnail((1200, 1200))
+        img_byte_arr = io.BytesIO()
+        img.save(img_byte_arr, format='JPEG', quality=85)
+        return types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/jpeg')
 
 def verrijk_zoekopdracht_met_gemini(client, model, originele_vraag):
     prompt = f"""
@@ -110,7 +140,7 @@ if "laatste_vraag" not in st.session_state:
     st.session_state.laatste_vraag = ""
 
 # ------------------------------------------------------------------------------
-# 3. INTERFACE (v1.1.0)
+# 3. INTERFACE (v1.1.1)
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
@@ -170,7 +200,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. ONDERZOEKSLOGICA MET VOORKEUR VOOR GESCHIEDENIS/PDF DOCS
+# 4. ONDERZOEKSLOGICA
 # ------------------------------------------------------------------------------
 if submit_button:
     if not onderzoeksvraag.strip():
@@ -207,7 +237,7 @@ if submit_button:
                     dossier_pagina_map[key]["bestanden"].append(b_naam)
                     dossier_pagina_map[key]["aantal_paginas"] += 1
 
-            # Opsplitsing in losse zoekwoorden voor soepele matching (bijv. "emiel" of "emile")
+            # Opsplitsing in losse zoekwoorden
             ruwe_termen = f"{onderzoeksvraag}, {st.session_state.verrijkte_termen}".replace(';', ',').split(',')
             zoek_woorden = set()
             for t in ruwe_termen:
@@ -225,11 +255,9 @@ if submit_button:
 
                 rij_tekst = f"{doc_id_val} {b_naam_val} {row.get('Genoemde Personen', '')} {row.get('Onderwerp (NL)', '')} {row.get('Inhoud & Cijfers (NL)', '')}".lower()
 
-                # Tel hoeveel van de zoekwoorden matchen in deze rij
                 matches = sum(1 for w in zoek_woorden if w in rij_tekst)
 
                 if matches >= 1:
-                    # Hoge prioriteit toekennen aan samenvattende PDF's/geschiedenisdocumenten
                     is_prio = "geschiedenis" in rij_tekst or "delvoie.pdf" in rij_tekst or "overzicht" in rij_tekst
                     
                     if target_id not in prio_doc_ids and target_id not in normaal_doc_ids:
@@ -244,12 +272,12 @@ if submit_button:
             st.warning("⚠️ Geen relevante documenten gevonden.")
             st.stop()
 
-        # Step 3: Payload direct opbouwen (afbeeldingen + PDF's)
+        # Step 3: Payload opbouwen (met v3.8.1 PDF engine)
         onderzoeks_payload = [
-            f"ONDERZOEKSVRAAG: {onderzoeksvraag}\nVERRIJKTE CONTEXT: {st.session_state.verrijkte_termen}\nBeantwoord de vraag zo nauwkeurig mogelijk. Controleer alle documenten (inclusief stamboeken en PDF-overzichten) op data en namen."
+            f"ONDERZOEKSVRAAG: {onderzoeksvraag}\nVERRIJKTE CONTEXT: {st.session_state.verrijkte_termen}\nBeantwoord de vraag zo nauwkeurig mogelijk. Controleer alle verstrekte PDF's en afbeeldingen op data en familienamen."
         ]
 
-        with st.spinner("Documenten en PDF's ophalen uit Drive..."):
+        with st.spinner("Documenten en PDF's ophalen uit Drive (v3.8.1 engine)..."):
             for doc_id in geselecteerde_doc_ids:
                 info = dossier_pagina_map.get(doc_id, {"bestanden": [doc_id], "aantal_paginas": 1})
                 pag_count = info["aantal_paginas"]
@@ -269,35 +297,20 @@ if submit_button:
                     b_id, b_real_naam, mime_type = f['id'], f['name'], f.get('mimeType', '')
                     weergave_titel = f"{doc_id} ({pag_count} pag.)" if pag_count > 1 else doc_id
                     
+                    # Direct openen in Viewer
                     drive_url = f"https://drive.google.com/file/d/{b_id}/view"
 
                     st.session_state.bron_details.append({
                         "naam": weergave_titel,
                         "id": b_id,
-                        "url": drive_url,
-                        "mime": mime_type
+                        "url": drive_url
                     })
 
                     try:
-                        req = drive_service.files().get_media(fileId=b_id)
-                        f_data = req.execute()
-
-                        # Afhandeling op basis van mime_type of extensie (PDF vs Afbeelding)
-                        if "pdf" in mime_type.lower() or b_real_naam.lower().endswith(".pdf"):
-                            pdf_part = types.Part.from_bytes(data=f_data, mime_type='application/pdf')
-                            onderzoeks_payload.append(f"\n--- DOSSIER/PDF: {doc_id} (Bestand: {b_real_naam}) ---")
-                            onderzoeks_payload.append(pdf_part)
-                        else:
-                            img = Image.open(io.BytesIO(f_data))
-                            if img.mode != 'RGB': img = img.convert('RGB')
-                            
-                            img.thumbnail((1200, 1200))
-                            img_byte_arr = io.BytesIO()
-                            img.save(img_byte_arr, format='JPEG', quality=85)
-
-                            img_part = types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/jpeg')
-                            onderzoeks_payload.append(f"\n--- DOSSIER: {doc_id} (Bestand: {b_real_naam}) ---")
-                            onderzoeks_payload.append(img_part)
+                        # Aanroepen van v3.8.1 PDF & Afbeelding downloader
+                        payload_part = laad_drive_bestand_payload(drive_service, b_id, mime_type, b_real_naam)
+                        onderzoeks_payload.append(f"\n--- DOSSIER/DOCUMENT: {doc_id} (Bestand: {b_real_naam}) ---")
+                        onderzoeks_payload.append(payload_part)
                     except Exception as ex:
                         st.write(f"Fout bij inladen {b_real_naam}: {ex}")
 

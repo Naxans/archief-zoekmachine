@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.3.7 (Unique Keyword Multiplier & Exact Matching)"
+APP_VERSION = "v1.3.8 (Balanced Name & Context Scoring)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -152,7 +152,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: wat weet je over een royal record radio model vedette?',
+        placeholder='Bijv: wanneer overleed emile delvoie?',
         height=100
     )
 with col2:
@@ -187,7 +187,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. SLIMME SCORING & UNIEKE TREFWOORDEN VERMENIGVULDIGER
+# 4. SLIMME GEBALANCEERDE SCORING (v1.3.8)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -224,12 +224,12 @@ if st.session_state.start_zoekopdracht:
 
             prompt_expansion = f"""
 Jij bent een zoekmachine-expert voor een Belgisch/Nederlands historisch archief.
-Analyseer de onderstaande vraag en genereer een brede lijst met meertalige synoniemen (Nederlands, Frans) en gerelateerde termen (bijv. radio, model, catalogus, specificatie, overlijden), maar genereer GEEN specifieke persoonsnamen (Emile, Antoine, Rutten etc.).
+Analyseer de onderstaande vraag en genereer een brede lijst met meertalige synoniemen (Nederlands, Frans) en gerelateerde termen (bijv. overlijden, radio, model, catalogus), maar genereer GEEN specifieke persoonsnamen (Emile, Antoine, Rutten etc.).
 
 GEBRUIKERSVRAAG: "{vraag_orig}"
 
 Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
-["radio", "model", "vedette", "apparaat", "specificatie"]
+["overleden", "décès", "sterfdatum", "in memoriam"]
 """
             uitgebreide_termen = []
             try:
@@ -264,36 +264,52 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
                 combi_tekst = f"{doc_id.lower()} {b_naam_norm} {pers} {ond} {inhoud}"
 
                 score = 0
-                unieke_matches = 0  # Telt hoeveel VERSCHILLENDE zoekwoorden voorkomen
+                has_naam_match = False
+                unieke_context_matches = 0
 
-                # 1. Harde persoonsnamen
+                # 1. Harde persoonsnamen (Geef zware prioriteit)
                 for ht in st.session_state.harde_naam_targets:
-                    if ht in b_naam_norm:
-                        score += 500000
-                    if ht in pers:
-                        score += 50000
+                    if ht in b_naam_norm or ht in pers:
+                        score += 100000
+                        has_naam_match = True
                     elif ht in ond or ht in inhoud:
-                        score += 10000
+                        score += 30000
+                        has_naam_match = True
 
-                # 2. Algemene trefwoorden belonen op uniekheid & positie
+                # 2. Algemene trefwoorden en context
                 voorwaarde_termen = [t for t in st.session_state.uitgebreide_zoektermen if len(t) >= 3]
                 
                 for term in voorwaarde_termen:
                     term_gevonden = False
                     if term in b_naam_norm:
-                        score += 20000  # Enorme bonus voor match in bestandsnaam
+                        score += 15000  # Bonus voor match in bestandsnaam
                         term_gevonden = True
                     elif term in combi_tekst:
-                        score += 1000   # Match in metadata
+                        score += 1000   # Match in inhoud/metadata
                         term_gevonden = True
                     
                     if term_gevonden:
-                        unieke_matches += 1
+                        unieke_context_matches += 1
 
-                # 3. VERMENIGVULDIGER: Hoe meer UNIEKE zoekwoorden, hoe exponentieel hoger de rangorde
-                if unieke_matches > 0:
-                    score = score * (unieke_matches ** 3)
-                    dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + score
+                # 3. Slimme Combinatie Multiplier
+                multiplier = 1
+                
+                # Als er naar een specifieke persoonsnaam werd gezocht
+                if st.session_state.harde_naam_targets:
+                    if has_naam_match:
+                        # Bekroon documenten met de naam én relevante context (max 3x om inflatie te stoppen)
+                        multiplier = 1 + min(unieke_context_matches, 3)
+                    else:
+                        # Geen naam gevonden terwijl er wel een naam werd gezocht? Zwaar afstraffen!
+                        score = score * 0.1
+                else:
+                    # Geen specifieke persoonsnaam in de vraag? Gebruik gecontroleerde context multiplier (max 4x)
+                    multiplier = 1 + min(unieke_context_matches, 4)
+
+                final_score = score * multiplier
+                
+                if final_score > 0:
+                    dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + final_score
 
             gesorteerde_dossiers = [d_id for d_id, sc in sorted(dossier_scores.items(), key=lambda x: x[1], reverse=True)]
 

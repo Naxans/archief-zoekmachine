@@ -14,17 +14,16 @@ from google.genai import types
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v1.1.1
+# Versie: v1.1.2
 # Datum: September 2026
 #
-# HERSTEL:
-# 1. Herstel van de exacte PDF-verwerkingsmodule uit v3.8.1 (inclusief robuuste 
-#    MediaIoBaseDownload streaming en native application/pdf payload).
-# 2. Directe Drive File View (/view) hersteld.
-# 3. Slimme fuzzy-matching op persoonsnamen (matcht 'Emiel' en 'Emile').
+# BUGFIX:
+# - Verplichte match op de hoofdpersoon (bijv. 'delvoie') om ruis van willekeurige
+#   aktes te voorkomen.
+# - Absolute prioriteit voor PDF-documenten zoals sites.google.com-delvoie.pdf.
 # ==============================================================================
 
-APP_VERSIE = "v1.1.1 (2026)"
+APP_VERSIE = "v1.1.2 (2026)"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
@@ -84,12 +83,7 @@ def genereer_met_retry(client, model, contents, max_retries=4):
                     continue
             raise e
 
-# --- PDF EN AFBEELDING VERWERKINGS ENGINE UIT V3.8.1 ---
 def laad_drive_bestand_payload(drive_service, file_id, mime_type, file_name):
-    """
-    Overgenomen uit v3.8.1: Robuuste download via MediaIoBaseDownload voor 
-    zowel grote PDF-bestanden als afbeeldingsbestanden.
-    """
     request = drive_service.files().get_media(fileId=file_id)
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
@@ -100,10 +94,8 @@ def laad_drive_bestand_payload(drive_service, file_id, mime_type, file_name):
     file_bytes = fh.getvalue()
 
     if "pdf" in mime_type.lower() or file_name.lower().endswith(".pdf"):
-        # Native PDF payload volgens v3.8.1 specificatie
         return types.Part.from_bytes(data=file_bytes, mime_type='application/pdf')
     else:
-        # Afbeelding verwerking (JPEG/PNG)
         img = Image.open(io.BytesIO(file_bytes))
         if img.mode != 'RGB': 
             img = img.convert('RGB')
@@ -117,7 +109,7 @@ def verrijk_zoekopdracht_met_gemini(client, model, originele_vraag):
 Jij bent een taalkundig en historisch expert gespecialiseerd in Belgische bedrijfs- en archiefstukken.
 De gebruiker stelt de volgende zoekvraag: "{originele_vraag}"
 
-Geef een door komma's gescheiden lijst van losse trefwoorden en naamvarianten (bijv: Emile, Emiel, Delvoie, overleden, décès, geschiedenis).
+Geef een door komma's gescheiden lijst van synoniemen, actiewoorden en naamvarianten (bijv: Emile, Emiel, Delvoie, overleden, décès, geschiedenis).
 """
     try:
         res = genereer_met_retry(client, model, prompt)
@@ -140,7 +132,7 @@ if "laatste_vraag" not in st.session_state:
     st.session_state.laatste_vraag = ""
 
 # ------------------------------------------------------------------------------
-# 3. INTERFACE (v1.1.1)
+# 3. INTERFACE (v1.1.2)
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
@@ -183,7 +175,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Wanneer is Emile Delvoie overleden?',
+        placeholder='wanneer is emile delvoie overleden?',
         height=90
     )
 with col2:
@@ -200,7 +192,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. ONDERZOEKSLOGICA
+# 4. ONDERZOEKSLOGICA MET VERPLICHTE NAAM-MATCHING
 # ------------------------------------------------------------------------------
 if submit_button:
     if not onderzoeksvraag.strip():
@@ -211,7 +203,7 @@ if submit_button:
         st.session_state.totaal_paginas = 0
         st.session_state.laatste_vraag = onderzoeksvraag
 
-        with st.spinner("🧠 Tussenstation: Trefwoorden & spelfout-varianten verzamelen..."):
+        with st.spinner("🧠 Tussenstation: Trefwoorden verzamelen..."):
             st.session_state.verrijkte_termen = verrijk_zoekopdracht_met_gemini(ai_client, MODEL_NAAM, onderzoeksvraag)
 
         with st.spinner("Inhoudsopgave scannen..."):
@@ -237,16 +229,13 @@ if submit_button:
                     dossier_pagina_map[key]["bestanden"].append(b_naam)
                     dossier_pagina_map[key]["aantal_paginas"] += 1
 
-            # Opsplitsing in losse zoekwoorden
-            ruwe_termen = f"{onderzoeksvraag}, {st.session_state.verrijkte_termen}".replace(';', ',').split(',')
-            zoek_woorden = set()
-            for t in ruwe_termen:
-                for w in t.strip().lower().split():
-                    if len(w) > 2:
-                        zoek_woorden.add(w)
+            # Bepaal de verplichte hoofdtermen (bijv. familienamen zoals 'delvoie')
+            vraag_woorden = [w.strip().lower() for w in onderzoeksvraag.split() if len(w.strip()) > 3]
+            hoofd_namen = [w for w in vraag_woorden if w not in ['wanneer', 'overleden', 'wie', 'wat', 'welke', 'waar']]
 
+            prio_pdf_ids = []
             prio_doc_ids = []
-            normaal_doc_ids = []
+            overige_doc_ids = []
 
             for row in data:
                 doc_id_val = str(row.get('Document_ID', '')).strip()
@@ -255,21 +244,23 @@ if submit_button:
 
                 rij_tekst = f"{doc_id_val} {b_naam_val} {row.get('Genoemde Personen', '')} {row.get('Onderwerp (NL)', '')} {row.get('Inhoud & Cijfers (NL)', '')}".lower()
 
-                matches = sum(1 for w in zoek_woorden if w in rij_tekst)
+                # HARDE EIS:minstens één hoofdpersoonsnaam MOET in de rij voorkomen
+                if hoofd_namen and not any(naam in rij_tekst for naam in hoofd_namen):
+                    continue
 
-                if matches >= 1:
-                    is_prio = "geschiedenis" in rij_tekst or "delvoie.pdf" in rij_tekst or "overzicht" in rij_tekst
-                    
-                    if target_id not in prio_doc_ids and target_id not in normaal_doc_ids:
-                        if is_prio:
-                            prio_doc_ids.append(target_id)
-                        else:
-                            normaal_doc_ids.append(target_id)
+                if target_id not in prio_pdf_ids and target_id not in prio_doc_ids and target_id not in overige_doc_ids:
+                    # PDF en Stamboeken krijgen de allergrootste voorrang
+                    if "pdf" in b_naam_val.lower() or "delvoie.pdf" in target_id.lower():
+                        prio_pdf_ids.append(target_id)
+                    elif "geschiedenis" in rij_tekst or "overzicht" in rij_tekst:
+                        prio_doc_ids.append(target_id)
+                    else:
+                        overige_doc_ids.append(target_id)
 
-            geselecteerde_doc_ids = (prio_doc_ids + normaal_doc_ids)[:max_dossiers]
+            geselecteerde_doc_ids = (prio_pdf_ids + prio_doc_ids + overige_doc_ids)[:max_dossiers]
 
         if not geselecteerde_doc_ids:
-            st.warning("⚠️ Geen relevante documenten gevonden.")
+            st.warning("⚠️ Geen relevante documenten gevonden voor deze naam.")
             st.stop()
 
         # Step 3: Payload opbouwen (met v3.8.1 PDF engine)
@@ -277,7 +268,7 @@ if submit_button:
             f"ONDERZOEKSVRAAG: {onderzoeksvraag}\nVERRIJKTE CONTEXT: {st.session_state.verrijkte_termen}\nBeantwoord de vraag zo nauwkeurig mogelijk. Controleer alle verstrekte PDF's en afbeeldingen op data en familienamen."
         ]
 
-        with st.spinner("Documenten en PDF's ophalen uit Drive (v3.8.1 engine)..."):
+        with st.spinner("Documenten en PDF's ophalen uit Drive..."):
             for doc_id in geselecteerde_doc_ids:
                 info = dossier_pagina_map.get(doc_id, {"bestanden": [doc_id], "aantal_paginas": 1})
                 pag_count = info["aantal_paginas"]
@@ -297,7 +288,6 @@ if submit_button:
                     b_id, b_real_naam, mime_type = f['id'], f['name'], f.get('mimeType', '')
                     weergave_titel = f"{doc_id} ({pag_count} pag.)" if pag_count > 1 else doc_id
                     
-                    # Direct openen in Viewer
                     drive_url = f"https://drive.google.com/file/d/{b_id}/view"
 
                     st.session_state.bron_details.append({
@@ -307,7 +297,6 @@ if submit_button:
                     })
 
                     try:
-                        # Aanroepen van v3.8.1 PDF & Afbeelding downloader
                         payload_part = laad_drive_bestand_payload(drive_service, b_id, mime_type, b_real_naam)
                         onderzoeks_payload.append(f"\n--- DOSSIER/DOCUMENT: {doc_id} (Bestand: {b_real_naam}) ---")
                         onderzoeks_payload.append(payload_part)

@@ -14,16 +14,16 @@ from google.genai import types
 # ==============================================================================
 # ARCHIEF ZOEKMACHINE - VERSIE INFORMATIE
 # ==============================================================================
-# Versie: v1.1.2
+# Versie: v1.1.3
 # Datum: September 2026
 #
-# BUGFIX:
-# - Verplichte match op de hoofdpersoon (bijv. 'delvoie') om ruis van willekeurige
-#   aktes te voorkomen.
-# - Absolute prioriteit voor PDF-documenten zoals sites.google.com-delvoie.pdf.
+# UPDATE:
+# - Progressive Rendering / Live UI Updates: Query expansion en documenten 
+#   worden direct op het scherm getoond zodra ze geladen zijn, nog VOORDAT 
+#   Gemini met de AI-analyse begint.
 # ==============================================================================
 
-APP_VERSIE = "v1.1.2 (2026)"
+APP_VERSIE = "v1.1.3 (2026)"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore")
@@ -54,7 +54,7 @@ except Exception as e:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 2. CONFIGURATIE & HELPER FUNCTIES (PDF ENGINE UIT V3.8.1)
+# 2. CONFIGURATIE & HELPER FUNCTIES
 # ------------------------------------------------------------------------------
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
@@ -132,7 +132,7 @@ if "laatste_vraag" not in st.session_state:
     st.session_state.laatste_vraag = ""
 
 # ------------------------------------------------------------------------------
-# 3. INTERFACE (v1.1.2)
+# 3. INTERFACE (v1.1.3)
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="RBC Archief zoekmachine", page_icon="🔍", layout="wide")
 
@@ -191,8 +191,45 @@ if stop_button:
     st.warning("⚠️ Onderzoek geannuleerd.")
     st.stop()
 
+# Placeholders voor directe live-weergave van onderdelen
+expansion_placeholder = st.empty()
+docs_placeholder = st.empty()
+rapport_placeholder = st.empty()
+
+# Helper-functie om documentenraster op te bouwen
+def toon_documenten_grid(container, bronnen, totaal_pags):
+    with container.container():
+        st.markdown("---")
+        aantal_dossiers = len(bronnen)
+        st.subheader(f"🖼️ Geselecteerde Archiefdocumenten ({aantal_dossiers} dossiers • {totaal_pags} pagina's)")
+        
+        cols = st.columns(6)
+        for idx, bron in enumerate(bronnen):
+            b_naam = bron["naam"]
+            b_id = bron["id"]
+            drive_url = bron.get("url", f"https://drive.google.com/file/d/{b_id}/view")
+            thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w400"
+
+            col = cols[idx % 6]
+            with col:
+                st.markdown(f"""
+                    <div class="doc-card">
+                        <a href="{drive_url}" target="_blank">
+                            <img src="{thumbnail_url}" alt="{b_naam}">
+                        </a>
+                        <div class="doc-title">{b_naam}</div>
+                    </div>
+                """, unsafe_allow_html=True)
+
+# Helper-functie om de query expansion op te bouwen
+def toon_expansion(container, vraag, termen):
+    with container.container():
+        with st.expander("🧠 Bekijk de door Gemini verrijkte zoektermen (Query Expansion)", expanded=True):
+            st.write(f"**Originele vraag:** {vraag}")
+            st.write(f"**Verrijkte trefwoorden & varianten:** {termen}")
+
 # ------------------------------------------------------------------------------
-# 4. ONDERZOEKSLOGICA MET VERPLICHTE NAAM-MATCHING
+# 4. ONDERZOEKSLOGICA (MET LIVE UPDATES)
 # ------------------------------------------------------------------------------
 if submit_button:
     if not onderzoeksvraag.strip():
@@ -203,9 +240,14 @@ if submit_button:
         st.session_state.totaal_paginas = 0
         st.session_state.laatste_vraag = onderzoeksvraag
 
+        # STAP 1: Query Expansion + Direct Tonen
         with st.spinner("🧠 Tussenstation: Trefwoorden verzamelen..."):
             st.session_state.verrijkte_termen = verrijk_zoekopdracht_met_gemini(ai_client, MODEL_NAAM, onderzoeksvraag)
+            
+        # LIVE UPDATE STAP 1
+        toon_expansion(expansion_placeholder, st.session_state.laatste_vraag, st.session_state.verrijkte_termen)
 
+        # STAP 2: Inhoudsopgave scannen
         with st.spinner("Inhoudsopgave scannen..."):
             try:
                 sh = gc.open(SHEET_NAAM)
@@ -229,7 +271,6 @@ if submit_button:
                     dossier_pagina_map[key]["bestanden"].append(b_naam)
                     dossier_pagina_map[key]["aantal_paginas"] += 1
 
-            # Bepaal de verplichte hoofdtermen (bijv. familienamen zoals 'delvoie')
             vraag_woorden = [w.strip().lower() for w in onderzoeksvraag.split() if len(w.strip()) > 3]
             hoofd_namen = [w for w in vraag_woorden if w not in ['wanneer', 'overleden', 'wie', 'wat', 'welke', 'waar']]
 
@@ -244,12 +285,10 @@ if submit_button:
 
                 rij_tekst = f"{doc_id_val} {b_naam_val} {row.get('Genoemde Personen', '')} {row.get('Onderwerp (NL)', '')} {row.get('Inhoud & Cijfers (NL)', '')}".lower()
 
-                # HARDE EIS:minstens één hoofdpersoonsnaam MOET in de rij voorkomen
                 if hoofd_namen and not any(naam in rij_tekst for naam in hoofd_namen):
                     continue
 
                 if target_id not in prio_pdf_ids and target_id not in prio_doc_ids and target_id not in overige_doc_ids:
-                    # PDF en Stamboeken krijgen de allergrootste voorrang
                     if "pdf" in b_naam_val.lower() or "delvoie.pdf" in target_id.lower():
                         prio_pdf_ids.append(target_id)
                     elif "geschiedenis" in rij_tekst or "overzicht" in rij_tekst:
@@ -263,7 +302,7 @@ if submit_button:
             st.warning("⚠️ Geen relevante documenten gevonden voor deze naam.")
             st.stop()
 
-        # Step 3: Payload opbouwen (met v3.8.1 PDF engine)
+        # STAP 3: Payload ophalen
         onderzoeks_payload = [
             f"ONDERZOEKSVRAAG: {onderzoeksvraag}\nVERRIJKTE CONTEXT: {st.session_state.verrijkte_termen}\nBeantwoord de vraag zo nauwkeurig mogelijk. Controleer alle verstrekte PDF's en afbeeldingen op data en familienamen."
         ]
@@ -303,7 +342,10 @@ if submit_button:
                     except Exception as ex:
                         st.write(f"Fout bij inladen {b_real_naam}: {ex}")
 
-        # Step 4: Gemini-analyse uitvoeren
+        # LIVE UPDATE STAP 2: Documentenoverzicht direct tonen zodra ze geladen zijn!
+        toon_documenten_grid(docs_placeholder, st.session_state.bron_details, st.session_state.totaal_paginas)
+
+        # STAP 4: Gemini-analyse pas daarna uitvoeren
         with st.spinner("📑 Historisch Onderzoeksrapport genereren met Gemini..."):
             try:
                 st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
@@ -313,56 +355,33 @@ if submit_button:
                 st.error(f"Fout tijdens analyse: {e}")
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE RESULTATEN
+# 5. PASSIEVE HERWEERGAVE BIJ VERVOLGVRAGEN EN PAGE REFRESH
 # ------------------------------------------------------------------------------
-if st.session_state.verrijkte_termen:
-    with st.expander("🧠 Bekijk de door Gemini verrijkte zoektermen (Query Expansion)", expanded=True):
-        st.write(f"**Originele vraag:** {st.session_state.laatste_vraag}")
-        st.write(f"**Verrijkte trefwoorden & varianten:** {st.session_state.verrijkte_termen}")
+if st.session_state.verrijkte_termen and submit_button is False:
+    toon_expansion(expansion_placeholder, st.session_state.laatste_vraag, st.session_state.verrijkte_termen)
 
-if st.session_state.bron_details:
-    st.markdown("---")
-    aantal_dossiers = len(st.session_state.bron_details)
-    totaal_pag = st.session_state.totaal_paginas
-    
-    st.subheader(f"🖼️ Geselecteerde Archiefdocumenten ({aantal_dossiers} dossiers • {totaal_pag} pagina's)")
-
-    cols = st.columns(6)
-    for idx, bron in enumerate(st.session_state.bron_details):
-        b_naam = bron["naam"]
-        b_id = bron["id"]
-        drive_url = bron.get("url", f"https://drive.google.com/file/d/{b_id}/view")
-        thumbnail_url = f"https://drive.google.com/thumbnail?id={b_id}&sz=w400"
-
-        col = cols[idx % 6]
-        with col:
-            st.markdown(f"""
-                <div class="doc-card">
-                    <a href="{drive_url}" target="_blank">
-                        <img src="{thumbnail_url}" alt="{b_naam}">
-                    </a>
-                    <div class="doc-title">{b_naam}</div>
-                </div>
-            """, unsafe_allow_html=True)
+if st.session_state.bron_details and submit_button is False:
+    toon_documenten_grid(docs_placeholder, st.session_state.bron_details, st.session_state.totaal_paginas)
 
 if st.session_state.chat_historie:
-    st.markdown("---")
-    st.subheader("📑 Historisch Onderzoeksrapport")
+    with rapport_placeholder.container():
+        st.markdown("---")
+        st.subheader("📑 Historisch Onderzoeksrapport")
 
-    for rol, tekst in st.session_state.chat_historie:
-        with st.chat_message(rol):
-            st.write(tekst)
+        for rol, tekst in st.session_state.chat_historie:
+            with st.chat_message(rol):
+                st.write(tekst)
 
-    if vervolgvraag := st.chat_input("Stel een vervolgvraag over dit rapport..."):
-        st.session_state.chat_historie.append(("user", vervolgvraag))
-        with st.chat_message("user"):
-            st.write(vervolgvraag)
+        if vervolgvraag := st.chat_input("Stel een vervolgvraag over dit rapport..."):
+            st.session_state.chat_historie.append(("user", vervolgvraag))
+            with st.chat_message("user"):
+                st.write(vervolgvraag)
 
-        with st.chat_message("assistant"):
-            with st.spinner("Analyseren..."):
-                try:
-                    response = st.session_state.actieve_chat.send_message(vervolgvraag)
-                    st.write(response.text)
-                    st.session_state.chat_historie.append(("assistant", response.text))
-                except Exception as e:
-                    st.error(f"Fout bij verwerken vervolgvraag: {e}")
+            with st.chat_message("assistant"):
+                with st.spinner("Analyseren..."):
+                    try:
+                        response = st.session_state.actieve_chat.send_message(vervolgvraag)
+                        st.write(response.text)
+                        st.session_state.chat_historie.append(("assistant", response.text))
+                    except Exception as e:
+                        st.error(f"Fout bij verwerken vervolgvraag: {e}")

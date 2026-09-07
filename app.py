@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.6.0 (Direct Drive File Analysis & Multimodal Gemini)"
+APP_VERSION = "v1.6.1 (JS Syntax Fix & Multimodal Gemini Direct Drive)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -584,7 +584,18 @@ if st.session_state.blader_paginas:
                         topDoc.getElementById('rbc-next-btn').onclick = (e) => { e.stopPropagation(); if (currentIndex < dossierPaginas.length - 1) { currentIndex++; updateViewer(); } };
                         topDoc.getElementById('rbc-reset-zoom').onclick = () => resetTransform();
                     }
-                 updateViewer();
+                }
+
+                function sluitModal() { 
+                    modal.remove(); 
+                    topDoc.body.style.overflow = 'auto'; 
+                    topDoc.onmousemove = null;
+                    topDoc.onmouseup = null;
+                }
+
+                topDoc.getElementById('rbc-close-btn').onclick = sluitModal;
+
+                updateViewer();
             }
             renderTiles();
         </script>

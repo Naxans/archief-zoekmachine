@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.5.3 (Model Splitting & Balanced Scoring)"
+APP_VERSION = "v1.5.4 (Fully Dynamic AI Query Splitting & Scoring)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -112,8 +112,10 @@ if "geselecteerde_doc_ids" not in st.session_state:
     st.session_state.geselecteerde_doc_ids = []
 if "huidige_vraag" not in st.session_state:
     st.session_state.huidige_vraag = ""
-if "uitgebreide_zoektermen" not in st.session_state:
-    st.session_state.uitgebreide_zoektermen = []
+if "specifieke_termen" not in st.session_state:
+    st.session_state.specifieke_termen = []
+if "generieke_termen" not in st.session_state:
+    st.session_state.generieke_termen = []
 if "harde_naam_targets" not in st.session_state:
     st.session_state.harde_naam_targets = []
 if "genegeerde_ruis" not in st.session_state:
@@ -154,7 +156,8 @@ if submit_button:
     st.session_state.chat_historie = []
     st.session_state.actieve_chat = None
     st.session_state.geselecteerde_doc_ids = []
-    st.session_state.uitgebreide_zoektermen = []
+    st.session_state.specifieke_termen = []
+    st.session_state.generieke_termen = []
     st.session_state.harde_naam_targets = []
     st.session_state.genegeerde_ruis = []
     st.session_state.huidige_vraag = onderzoeksvraag
@@ -173,7 +176,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. INTELLIGENTE AI QUERY EXPANSION & SCORING (v1.5.3)
+# 4. VOLLEDIG DYNAMISCHE AI QUERY ONTLEDING & SCORING (v1.5.4)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -191,7 +194,7 @@ if st.session_state.start_zoekopdracht:
                 st.session_state.start_zoekopdracht = False
                 st.stop()
 
-        with st.spinner("Stap 1b/3: Slimme AI-ontleding van de vraag (Query Expansion)..."):
+        with st.spinner("Stap 1b/3: Dynamische AI-ontleding van de vraag (AI Query Expansion)..."):
             vraag_orig = st.session_state.huidige_vraag
 
             prompt_extraction = f"""
@@ -200,23 +203,23 @@ Jij bent een intelligente zoekarchivaris voor een Belgisch/Nederlands archief. O
 GEBRUIKERSVRAAG: "{vraag_orig}"
 
 TAAK:
-1. "personen": Extraheer persoonsnamen EN genereer automatisch bekende spellingvariaties voor voornamen/achternamen (bijv. "emile" -> ["emile", "emiel"], "mathieu" -> ["mathieu", "matthieu"]).
-2. "kernbegrippen": Extraheer uitsluitend UNIEKE inhoudelijke merknamen, typenamen, locaties, apparaten of specifieke onderwerpen (bijv. "royal record", "vedette", "elektriciteitscentrale", "tongeren").
-3. "synoniemen_frans": Voeg relevante Franse synoniemen toe voor de kernbegrippen (bijv. "poste de radio", "récepteur radio").
-4. "ruis_genegeerd": Identificeer alle grammaticale ruis, vraagwoorden, én generieke aanduidingen zoals "model", "modèle", "type", "versie", "serie", "merk", "nummer", "foto", "afbeelding", "pagina", "boek", "geschreven".
+1. "personen": Extraheer persoonsnamen EN genereer bekende spellingvariaties voor voornamen/achternamen (bijv. "emile" -> ["emile", "emiel"], "mathieu" -> ["mathieu", "matthieu"]).
+2. "specifieke_termen": Extraheer uitsluitend de MEEST SPECIFIEKE en UNIEKE identificatierestanten die het exacte onderwerp bepalen. Dit kan een specifiek model, typenummer, dossiernummer, unieke straatnaam of zeldzaam trefwoord zijn. (Bijv. bij "royal record radio model vedette" is dit uitsluitend ["vedette"]).
+3. "generieke_termen": Extraheer meer algemene aanduidingen, merknamen, vakgebieden of algemene categorieën die de bredere context beschrijven. (Bijv. ["royal record", "radio", "toestel"]).
+4. "ruis_genegeerd": Grammaticale ruis, vraagwoorden en algemene aanduidingen (zoals "wat", "weet", "je", "over", "een", "model", "type", "foto", "document").
 
 Geef UITSLUITEND een geldig JSON-object terug:
 {{
   "personen": [],
-  "kernbegrippen": ["royal record", "vedette", "radio"],
-  "synoniemen_frans": ["poste de radio", "récepteur radio"],
-  "ruis_genegeerd": ["wat", "weet", "je", "over", "een", "model", "modèle"]
+  "specifieke_termen": ["vedette"],
+  "generieke_termen": ["royal record", "radio"],
+  "ruis_genegeerd": ["wat", "weet", "je", "over", "een", "model"]
 }}
 """
             extracted_data = {
                 "personen": [],
-                "kernbegrippen": [],
-                "synoniemen_frans": [],
+                "specifieke_termen": [],
+                "generieke_termen": [],
                 "ruis_genegeerd": []
             }
 
@@ -235,18 +238,20 @@ Geef UITSLUITEND een geldig JSON-object terug:
             elif 'emiel' in harde_namen and 'emile' not in harde_namen:
                 harde_namen.append('emile')
 
-            kern_termen = [normaliseer_tekst(k) for k in extracted_data.get("kernbegrippen", []) if len(k) >= 3]
-            franse_termen = [normaliseer_tekst(f) for f in extracted_data.get("synoniemen_frans", []) if len(f) >= 3]
+            spec_termen = [normaliseer_tekst(s) for s in extracted_data.get("specifieke_termen", []) if len(s) >= 2]
+            gen_termen = [normaliseer_tekst(g) for g in extracted_data.get("generieke_termen", []) if len(g) >= 2]
             ruis = [normaliseer_tekst(r) for r in extracted_data.get("ruis_genegeerd", [])]
 
             st.session_state.harde_naam_targets = list(set(harde_namen))
-            st.session_state.uitgebreide_zoektermen = list(set(kern_termen + franse_termen))
+            st.session_state.specifieke_termen = list(set(spec_termen))
+            st.session_state.generieke_termen = list(set(gen_termen))
             st.session_state.genegeerde_ruis = list(set(ruis))
 
         with st.spinner("Stap 2/3: Archiefstukken & PDF's matchen op inhoud..."):
             dossier_scores = {}
 
-            hoofd_kernwoorden = st.session_state.uitgebreide_zoektermen
+            specifieke_termen = st.session_state.specifieke_termen
+            generieke_termen = st.session_state.generieke_termen
             harde_namen = st.session_state.harde_naam_targets
 
             for row in data:
@@ -262,46 +267,51 @@ Geef UITSLUITEND een geldig JSON-object terug:
                 b_naam_norm = normaliseer_tekst(b_naam)
 
                 score = 0
-                exact_filename_matches = 0
-                aantal_naam_matches = 0
-                aantal_kernwoord_matches = 0
+                aantal_specifieke_matches = 0
+                heeft_specifieke_match = False
 
-                # 1. MATCHING OP PERSONEN
+                # 1. MATCHING OP PERSONEN (Zeer hoge prioriteit)
                 for hn in harde_namen:
                     if hn in b_naam_norm:
-                        score += 15000
-                        exact_filename_matches += 1
-                        aantal_naam_matches += 1
+                        score += 20000
+                        heeft_specifieke_match = True
                     elif hn in pers:
-                        score += 5000
-                        aantal_naam_matches += 1
+                        score += 8000
+                        heeft_specifieke_match = True
                     elif hn in ond or hn in inhoud:
-                        score += 1500
-                        aantal_naam_matches += 1
-
-                # 2. MATCHING OP KERNBEGRIPPEN
-                for kt in hoofd_kernwoorden:
-                    if kt in b_naam_norm:
-                        score += 10000
-                        exact_filename_matches += 1
-                        aantal_kernwoord_matches += 1
-                    elif kt in ond or kt in inhoud:
                         score += 2000
-                        aantal_kernwoord_matches += 1
 
-                # 3. DYNAMISCHE MULTIPLIER & GEBALANCEERDE AFSTRAFFING
-                multiplier = 1.0
+                # 2. MATCHING OP DYNAMISCHE SPECIFIEKE TERMEN (Unieke modellen, types, nummers)
+                for st_term in specifieke_termen:
+                    if st_term in b_naam_norm:
+                        score += 25000  # Maximale bonus voor exacte specifieke match in bestandsnaam
+                        heeft_specifieke_match = True
+                        aantal_specifieke_matches += 1
+                    elif st_term in ond or st_term in inhoud:
+                        score += 6000
+                        heeft_specifieke_match = True
+                        aantal_specifieke_matches += 1
 
-                if exact_filename_matches > 0:
-                    multiplier += (exact_filename_matches * 1.5)
+                # 3. MATCHING OP DYNAMISCHE GENERIEKE TERMEN (Bredere categorieën, merknamen)
+                for gt_term in generieke_termen:
+                    if gt_term in b_naam_norm:
+                        score += 1500
+                    elif gt_term in ond or gt_term in inhoud:
+                        score += 400
 
-                if hoofd_kernwoorden and aantal_kernwoord_matches == 0 and aantal_naam_matches == 0:
-                    score = score * 0.01
+                # 4. STRATIGISCHE DYNAMISCHE PENALTY
+                # Als de vraag minstens één 'specifieke term' of 'persoon' bevatte, 
+                # maar dit specifieke document heeft daar NUL matches op (en alleen op generieke begrippen),
+                # dan geven we 95% strafpunten om algemene kranten of foute modellen te onderdrukken.
+                if (specifieke_termen or harde_namen) and not heeft_specifieke_match:
+                    score *= 0.05
 
-                final_score = score * multiplier
+                # Extra bonus als er meerdere specifieke zoektermen tegelijk matchen
+                if aantal_specifieke_matches > 1:
+                    score *= (1 + (aantal_specifieke_matches * 0.5))
 
-                if final_score > 0:
-                    dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + final_score
+                if score > 0:
+                    dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + score
 
             gesorteerde_dossiers = [d_id for d_id, sc in sorted(dossier_scores.items(), key=lambda x: x[1], reverse=True)]
 
@@ -375,8 +385,10 @@ if st.session_state.blader_paginas:
         st.markdown(f"**Originele vraag:** `{st.session_state.huidige_vraag}`")
         if st.session_state.harde_naam_targets:
             st.markdown(f"**Geëxtraheerde personen:** `{', '.join(st.session_state.harde_naam_targets)}`")
-        if st.session_state.uitgebreide_zoektermen:
-            st.markdown(f"**Inhoudelijke Kernbegrippen & Synoniemen:** `{', '.join(st.session_state.uitgebreide_zoektermen)}`")
+        if st.session_state.specifieke_termen:
+            st.markdown(f"**Unieke / Specifieke kernbegrippen (Hoge score):** `{', '.join(st.session_state.specifieke_termen)}`")
+        if st.session_state.generieke_termen:
+            st.markdown(f"**Generieke contextbegrippen:** `{', '.join(st.session_state.generieke_termen)}`")
         if st.session_state.genegeerde_ruis:
             st.markdown(f"**🚫 Automatisch genegeerde ruis:** `{', '.join(st.session_state.genegeerde_ruis)}`")
 

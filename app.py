@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.5.1 (Person-First Scoring & Name Expansion)"
+APP_VERSION = "v1.5.2 (Noise Filtering for Generic Terms)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -137,7 +137,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: wanneer overleed emile delvoie?',
+        placeholder='Bijv: wat weet je over een royal record radio model vedette?',
         height=100
     )
 with col2:
@@ -173,7 +173,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. INTELLIGENTE AI QUERY EXPANSION & SCORING (v1.5.1)
+# 4. INTELLIGENTE AI QUERY EXPANSION & SCORING (v1.5.2)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -201,16 +201,16 @@ GEBRUIKERSVRAAG: "{vraag_orig}"
 
 TAAK:
 1. "personen": Extraheer persoonsnamen EN genereer automatisch bekende spellingvariaties voor voornamen/achternamen (bijv. "emile" -> ["emile", "emiel"], "mathieu" -> ["mathieu", "matthieu"]).
-2. "kernbegrippen": Extraheer uitsluitend inhoudelijke onderwerpen, locaties, apparaten of begrippen (bijv. "elektriciteitscentrale", "tongeren").
-3. "synoniemen_frans": Voeg relevante Franse synoniemen toe voor de kernbegrippen (bijv. "centrale électrique", "décès").
-4. "ruis_genegeerd": Identificeer alle grammaticale ruis, vraagwoorden, werkwoorden of generieke woorden (bijv. "wanneer", "overleed", "wat", "staat", "in", "het", "boek", "geschreven").
+2. "kernbegrippen": Extraheer uitsluitend UNIEKE inhoudelijke merknamen, typenamen, locaties, apparaten of specifieke onderwerpen (bijv. "royal record", "vedette", "elektriciteitscentrale", "tongeren").
+3. "synoniemen_frans": Voeg relevante Franse synoniemen toe voor de kernbegrippen (bijv. "poste de radio", "récepteur radio").
+4. "ruis_genegeerd": Identificeer alle grammaticale ruis, vraagwoorden, én generieke aanduidingen zoals "model", "modèle", "type", "versie", "serie", "merk", "nummer", "foto", "afbeelding", "pagina", "boek", "geschreven".
 
 Geef UITSLUITEND een geldig JSON-object terug:
 {{
-  "personen": ["emile", "emiel", "delvoie"],
-  "kernbegrippen": [],
-  "synoniemen_frans": ["décès", "mort"],
-  "ruis_genegeerd": ["wanneer", "overleed"]
+  "personen": [],
+  "kernbegrippen": ["royal record", "vedette", "radio"],
+  "synoniemen_frans": ["poste de radio", "récepteur radio"],
+  "ruis_genegeerd": ["wat", "weet", "je", "over", "een", "model", "modèle"]
 }}
 """
             extracted_data = {
@@ -230,7 +230,6 @@ Geef UITSLUITEND een geldig JSON-object terug:
 
             harde_namen = [normaliseer_tekst(p) for p in extracted_data.get("personen", []) if len(p) >= 2]
             
-            # Extra handmatige fallback voor Emile/Emiel
             if 'emile' in harde_namen and 'emiel' not in harde_namen:
                 harde_namen.append('emiel')
             elif 'emiel' in harde_namen and 'emile' not in harde_namen:
@@ -267,7 +266,7 @@ Geef UITSLUITEND een geldig JSON-object terug:
                 aantal_naam_matches = 0
                 aantal_kernwoord_matches = 0
 
-                # 1. MATCHING OP PERSONEN (Zeer hoge prioriteit)
+                # 1. MATCHING OP PERSONEN
                 for hn in harde_namen:
                     if hn in b_naam_norm:
                         score += 150000
@@ -296,7 +295,6 @@ Geef UITSLUITEND een geldig JSON-object terug:
                 if exact_filename_matches > 0:
                     multiplier += (exact_filename_matches * 5.0)
 
-                # Pas ALLEEN een afstraffing toe als er GEEN persoonsnaam is gematcht én er wel kernwoorden ontbreken
                 if hoofd_kernwoorden and aantal_kernwoord_matches == 0 and aantal_naam_matches == 0:
                     score = score * 0.01
 
@@ -451,7 +449,6 @@ if st.session_state.blader_paginas:
                 const dossierPaginas = alleDossiers[docId] || [];
                 let currentIndex = 0;
 
-                // Zoom & Pan variabelen
                 let scale = 1;
                 let pointX = 0;
                 let pointY = 0;

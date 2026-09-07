@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.4.0 (Universal Filename Exact Match)"
+APP_VERSION = "v1.5.0 (AI Intelligent Entity Extraction)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -69,23 +69,6 @@ except Exception as e:
 DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
-NEDERLANDSE_STOPWOORDEN = {
-    'wanneer', 'hoe', 'wat', 'wie', 'waar', 'is', 'van', 'de', 'het', 'een', 'en', 'in', 
-    'op', 'te', 'dat', 'die', 'met', 'voor', 'zijn', 'was', 'er', 'ze', 'om', 'over', 
-    'aan', 'bij', 'naar', 'uit', 'door', 'je', 'hij', 'we', 'ze', 'om', 'of', 'tot',
-    'weet', 'geef', 'zoek', 'over', 'model'
-}
-
-BEKENDE_NAAM_VARIANTEN = {
-    'emile': 'emile',
-    'emiel': 'emiel',
-    'paul': 'paul',
-    'antoine': 'antoine',
-    'mathieu': 'mathieu',
-    'rutten': 'rutten',
-    'delvoie': 'delvoie'
-}
-
 def bepaal_werkend_model(client):
     kandidaten = ['gemini-flash-latest', 'gemini-flash-lite-latest']
     for model_naam in kandidaten:
@@ -133,6 +116,8 @@ if "uitgebreide_zoektermen" not in st.session_state:
     st.session_state.uitgebreide_zoektermen = []
 if "harde_naam_targets" not in st.session_state:
     st.session_state.harde_naam_targets = []
+if "genegeerde_ruis" not in st.session_state:
+    st.session_state.genegeerde_ruis = []
 
 # ------------------------------------------------------------------------------
 # 3. STREAMLIT INTERFACE
@@ -152,7 +137,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: wat weet je over een royal record radio model vedette?',
+        placeholder='Bijv: wat staat in het boek geschreven door Mathieu rutten over de elektriciteitscentrale in tongeren?',
         height=100
     )
 with col2:
@@ -171,6 +156,7 @@ if submit_button:
     st.session_state.geselecteerde_doc_ids = []
     st.session_state.uitgebreide_zoektermen = []
     st.session_state.harde_naam_targets = []
+    st.session_state.genegeerde_ruis = []
     st.session_state.huidige_vraag = onderzoeksvraag
     gc.collect()
 
@@ -187,7 +173,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. UNIVERSELE BESTANDSNAAM SCORING & PRIORITEIT (v1.4.0)
+# 4. INTELLIGENTE AI QUERY EXPANSION & SCORING (v1.5.0)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -205,55 +191,65 @@ if st.session_state.start_zoekopdracht:
                 st.session_state.start_zoekopdracht = False
                 st.stop()
 
-        with st.spinner("Stap 1b/3: Trefwoorden & context-uitbreiding genereren..."):
+        with st.spinner("Stap 1b/3: Slimme AI-ontleding van de vraag (Query Expansion)..."):
             vraag_orig = st.session_state.huidige_vraag
-            vraag_norm = normaliseer_tekst(vraag_orig)
-            woorden_in_vraag = re.sub(r'[^\w\s]', ' ', vraag_norm).split()
-            
-            harde_targets = []
-            for w in woorden_in_vraag:
-                if len(w) >= 3 and w in BEKENDE_NAAM_VARIANTEN:
-                    harde_targets.append(BEKENDE_NAAM_VARIANTEN[w])
-            
-            if 'emile' in harde_targets and 'delvoie' in harde_targets and 'emiel' not in harde_targets:
-                harde_targets.append('emiel')
-            elif 'emiel' in harde_targets and 'delvoie' in harde_targets and 'emile' not in harde_targets:
-                harde_targets.append('emile')
 
-            st.session_state.harde_naam_targets = list(set(harde_targets))
-
-            prompt_expansion = f"""
-Jij bent een zoekmachine-expert voor een Belgisch/Nederlands historisch archief.
-Analyseer de onderstaande vraag en genereer een brede lijst met meertalige synoniemen (Nederlands, Frans) en gerelateerde termen (bijv. overlijden, radio, model, catalogus).
+            prompt_extraction = f"""
+Jij bent een intelligente zoekarchivaris. Ontleed de onderstaande zoekvraag van een gebruiker.
 
 GEBRUIKERSVRAAG: "{vraag_orig}"
 
-Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
-["overleden", "décès", "sterfdatum", "in memoriam"]
+TAAK:
+1. "personen": Extraheer uitsluitend persoonsnamen (bijv. "mathieu", "rutten", "emile", "delvoie").
+2. "kernbegrippen": Extraheer uitsluitend inhoudelijke onderwerpen, locaties, apparaten of specifieke begrippen (bijv. "elektriciteitscentrale", "tongeren", "vedette").
+3. "synoniemen_frans": Voeg relevante Franse synoniemen toe voor de kernbegrippen (bijv. "centrale électrique", "décès").
+4. "ruis_genegeerd": Identificeer alle grammaticale ruis, vraagwoorden, werkwoorden of generieke woorden die GEEN specifieke inhoud bevatten (bijv. "wat", "staat", "in", "het", "boek", "geschreven", "door", "over", "de").
+
+Geef UITSLUITEND een geldig JSON-object terug in het volgende formaat:
+{{
+  "personen": ["mathieu", "rutten"],
+  "kernbegrippen": ["elektriciteitscentrale", "tongeren"],
+  "synoniemen_frans": ["centrale électrique"],
+  "ruis_genegeerd": ["wat", "staat", "in", "het", "boek", "geschreven", "door", "over", "de"]
+}}
 """
-            uitgebreide_termen = []
+            extracted_data = {
+                "personen": [],
+                "kernbegrippen": [],
+                "synoniemen_frans": [],
+                "ruis_genegeerd": []
+            }
+
             try:
-                expansion_res = genereer_met_retry(ai_client, MODEL_NAAM, prompt_expansion)
-                json_match = re.search(r'\[.*\]', expansion_res.text, re.DOTALL)
+                res = genereer_met_retry(ai_client, MODEL_NAAM, prompt_extraction)
+                json_match = re.search(r'\{.*\}', res.text, re.DOTALL)
                 if json_match:
-                    uitgebreide_termen = json.loads(json_match.group(0))
-            except Exception:
-                uitgebreide_termen = []
+                    extracted_data = json.loads(json_match.group(0))
+            except Exception as e:
+                st.warning(f"AI-ontleding waarschuwing: {e}")
 
-            basis_woorden_groot = [w for w in woorden_in_vraag if len(w) >= 3 and w not in NEDERLANDSE_STOPWOORDEN]
+            # Normaliseer alle geëxtraheerde elementen
+            harde_namen = [normaliseer_tekst(p) for p in extracted_data.get("personen", []) if len(p) >= 2]
             
-            alle_zoektermen = list(set([normaliseer_tekst(t) for t in uitgebreide_termen + basis_woorden_groot 
-                                        if t and t not in NEDERLANDSE_STOPWOORDEN and t not in st.session_state.harde_naam_targets]))
-            st.session_state.uitgebreide_zoektermen = alle_zoektermen
+            # Voeg bekende naam-varianten toe indien van toepassing (bijv. emile/emiel)
+            if 'emile' in harde_namen and 'emiel' not in harde_namen:
+                harde_namen.append('emiel')
+            elif 'emiel' in harde_namen and 'emile' not in harde_namen:
+                harde_namen.append('emile')
 
-        with st.spinner("Stap 2/3: Archiefstukken & PDF's matchen op unieke trefwoorden..."):
+            kern_termen = [normaliseer_tekst(k) for k in extracted_data.get("kernbegrippen", []) if len(k) >= 3]
+            franse_termen = [normaliseer_tekst(f) for f in extracted_data.get("synoniemen_frans", []) if len(f) >= 3]
+            ruis = [normaliseer_tekst(r) for r in extracted_data.get("ruis_genegeerd", [])]
+
+            st.session_state.harde_naam_targets = list(set(harde_namen))
+            st.session_state.uitgebreide_zoektermen = list(set(kern_termen + franse_termen))
+            st.session_state.genegeerde_ruis = list(set(ruis))
+
+        with st.spinner("Stap 2/3: Archiefstukken & PDF's matchen op inhoud..."):
             dossier_scores = {}
 
-            # Verzamel alle harde kernwoorden uit de zoekopdracht zelf (zonder stopwoorden)
-            kernwoorden_vraag = [w for w in re.sub(r'[^\w\s]', ' ', normaliseer_tekst(st.session_state.huidige_vraag)).split() 
-                                 if len(w) >= 3 and w not in NEDERLANDSE_STOPWOORDEN]
-
-            alle_zoektermen = list(set(st.session_state.harde_naam_targets + st.session_state.uitgebreide_zoektermen + kernwoorden_vraag))
+            hoofd_kernwoorden = st.session_state.uitgebreide_zoektermen
+            harde_namen = st.session_state.harde_naam_targets
 
             for row in data:
                 b_naam = str(row.get('Bestandsnaam', '')).strip()
@@ -271,41 +267,38 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
 
                 score = 0
                 exact_filename_matches = 0
-                unieke_context_matches = 0
+                aantal_kernwoord_matches = 0
 
-                # 1. MATCHING OP GEZOCHTE TERMEN EN BESTANDSNAAM PRIORITEIT
-                for term in alle_zoektermen:
-                    if len(term) < 3:
-                        continue
-                    
-                    term_in_filename = term in b_naam_norm
-                    term_in_metadata = term in pers or term in ond or term in inhoud
+                # 1. MATCHING OP KERNBEGRIPPEN (bijv. 'elektriciteitscentrale', 'tongeren', 'vedette')
+                for kt in hoofd_kernwoorden:
+                    if kt in b_naam_norm:
+                        score += 200000
+                        exact_filename_matches += 1
+                        aantal_kernwoord_matches += 1
+                    elif kt in ond or kt in inhoud:
+                        score += 40000
+                        aantal_kernwoord_matches += 1
 
-                    if term_in_filename:
-                        # Enorme bonus als de zoekterm (bijv. 'vedette', 'delvoie', 'grandluxe') in de bestandsnaam staat
+                # 2. MATCHING OP PERSONEN (bijv. 'mathieu', 'rutten', 'delvoie')
+                for hn in harde_namen:
+                    if hn in b_naam_norm:
                         score += 100000
                         exact_filename_matches += 1
+                    elif hn in pers:
+                        score += 30000
+                    elif hn in ond or hn in inhoud:
+                        score += 10000
 
-                    if term_in_metadata:
-                        score += 5000
-                        unieke_context_matches += 1
-
-                # 2. CONTROLEER OF HET SPECIFIEKE KERNWOORD AANWEZIG IS
-                heeft_kernwoord_match = any(kw in combi_tekst for kw in kernwoorden_vraag if kw not in {'radio', 'koninklijke'})
-
-                # 3. DYNAMISCHE MULTIPLIER & AFSTRAFFING GENERIEKE DOSSIERS
+                # 3. DYNAMISCHE MULTIPLIER & AFSTRAFFING VOOR MISMATCHES
                 multiplier = 1.0
 
                 if exact_filename_matches > 0:
-                    # Hoe meer zoekwoorden in de bestandsnaam zelf staan, hoe hoger de vermenigvuldiger
                     multiplier += (exact_filename_matches * 5.0)
 
-                # Als er specifieke kernwoorden in de vraag staan (zoals 'vedette' of 'delvoie'), straf documenten af die deze NIET hebben
-                specifieke_kernwoorden = [kw for kw in kernwoorden_vraag if kw not in {'radio', 'koninklijke'}]
-                if specifieke_kernwoorden:
-                    if not heeft_kernwoord_match:
-                        # Geen match met het specifieke kernwoord? Zware afstraffing (bijv. kranten die toevallig alleen 'radio' herhalen)
-                        score = score * 0.01
+                # Als de gebruiker specifieke kernbegrippen zoekt (bijv. elektriciteitscentrale) 
+                # én het document bevat DIT kernbegrip niet, geef dan een zware afstraffing.
+                if hoofd_kernwoorden and aantal_kernwoord_matches == 0:
+                    score = score * 0.01
 
                 final_score = score * multiplier
 
@@ -380,12 +373,14 @@ Geef UITSLUITEND een JSON-array van strings terug, bijvoorbeeld:
 if st.session_state.blader_paginas:
     st.divider()
     
-    with st.expander("💡 Bekijk de door Gemini verrijkte context-zoektermen (Query Expansion)"):
+    with st.expander("💡 Bekijk de slimme AI Query-analyse & Genegeerde Ruis"):
         st.markdown(f"**Originele vraag:** `{st.session_state.huidige_vraag}`")
         if st.session_state.harde_naam_targets:
-            st.markdown(f"**Hardcoded persoonsnamen:** `{', '.join(st.session_state.harde_naam_targets)}`")
+            st.markdown(f"**Geëxtraheerde personen:** `{', '.join(st.session_state.harde_naam_targets)}`")
         if st.session_state.uitgebreide_zoektermen:
-            st.markdown(f"**Verrijkte context-trefwoorden & Franse termen:** `{', '.join(st.session_state.uitgebreide_zoektermen)}`")
+            st.markdown(f"**Inhoudelijke Kernbegrippen & Synoniemen:** `{', '.join(st.session_state.uitgebreide_zoektermen)}`")
+        if st.session_state.genegeerde_ruis:
+            st.markdown(f"**🚫 Automatisch genegeerde ruis:** `{', '.join(st.session_state.genegeerde_ruis)}`")
 
     dossiers_dict = {}
     for p in st.session_state.blader_paginas:

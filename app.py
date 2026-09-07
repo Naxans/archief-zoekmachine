@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.5.5 (Strict API Error Handling & Dynamic Scoring)"
+APP_VERSION = "v1.6.0 (Direct Drive File Analysis & Multimodal Gemini)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -176,7 +176,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. QUERY ONTLEDING & DYNAMISCHE SCORING (v1.5.5)
+# 4. QUERY ONTLEDING & DYNAMISCHE SCORING
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -272,7 +272,6 @@ Geef UITSLUITEND een geldig JSON-object terug:
                 aantal_specifieke_matches = 0
                 heeft_specifieke_match = False
 
-                # 1. MATCHING OP PERSONEN (Hoge prioriteit)
                 for hn in harde_namen:
                     if hn in b_naam_norm:
                         score += 20000
@@ -283,10 +282,9 @@ Geef UITSLUITEND een geldig JSON-object terug:
                     elif hn in ond or hn in inhoud:
                         score += 2000
 
-                # 2. MATCHING OP DYNAMISCHE SPECIFIEKE TERMEN (Unieke modellen, types, nummers)
                 for st_term in specifieke_termen:
                     if st_term in b_naam_norm:
-                        score += 25000  # Maximale bonus voor exacte match in bestandsnaam
+                        score += 25000
                         heeft_specifieke_match = True
                         aantal_specifieke_matches += 1
                     elif st_term in ond or st_term in inhoud:
@@ -294,16 +292,12 @@ Geef UITSLUITEND een geldig JSON-object terug:
                         heeft_specifieke_match = True
                         aantal_specifieke_matches += 1
 
-                # 3. MATCHING OP DYNAMISCHE GENERIEKE TERMEN (Bredere categorieën, merknamen)
                 for gt_term in generieke_termen:
                     if gt_term in b_naam_norm:
                         score += 1500
                     elif gt_term in ond or gt_term in inhoud:
                         score += 400
 
-                # 4. STRATEGISCHE DYNAMISCHE PENALTY
-                # Als er specifieke zoektermen waren, maar dit bestand heeft 0 specifieke matches,
-                # krijgt het 95% strafpunten om generieke kranten en foute modellen te onderdrukken.
                 if (specifieke_termen or harde_namen) and not heeft_specifieke_match:
                     score *= 0.05
 
@@ -590,18 +584,7 @@ if st.session_state.blader_paginas:
                         topDoc.getElementById('rbc-next-btn').onclick = (e) => { e.stopPropagation(); if (currentIndex < dossierPaginas.length - 1) { currentIndex++; updateViewer(); } };
                         topDoc.getElementById('rbc-reset-zoom').onclick = () => resetTransform();
                     }
-                }
-
-                function sluitModal() { 
-                    modal.remove(); 
-                    topDoc.body.style.overflow = 'auto'; 
-                    topDoc.onmousemove = null;
-                    topDoc.onmouseup = null;
-                }
-
-                topDoc.getElementById('rbc-close-btn').onclick = sluitModal;
-
-                updateViewer();
+                 updateViewer();
             }
             renderTiles();
         </script>
@@ -619,29 +602,63 @@ if st.session_state.blader_paginas:
     components.html(grid_html, height=(aantal_rijen * 240) + 15, scrolling=False)
 
 # ------------------------------------------------------------------------------
-# 6. HISTORISCHE ANALYSE VIA GEMINI
+# 6. MULTIMODAL HISTORISCHE ANALYSE VIA GEMINI (OPTIE A: DIRECT DRIVE FILE READING)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas and not st.session_state.chat_historie:
-    with st.spinner("Stap 3/3: Historische analyse genereren..."):
+    with st.spinner("Stap 3/3: Originele PDF's/Afbeeldingen ophalen & Historische analyse genereren..."):
         try:
             onderzoeks_prompt = f"""
-Jij bent een historisch archivariseXpert voor een Belgisch archief.
-Analyseer de onderstaande bronteksten en geef een gedetailleerd antwoord op de vraag.
+Jij bent een zeer nauwkeurige historisch archivarisexpert voor een Belgisch archief.
+Analyseer de meegeleverde originele bestanden (PDF's / afbeeldingen) EN de metadata-samenvattingen grondig en geef een gedetailleerd antwoord op de vraag.
 
-BELANGRIJKE INSTRUCTIE MET BETREKKING TOT PERSONEN & MODELLEN:
-- Als er specifiek over radio-modellen, apparaten of technische documentatie wordt gevraagd, vat de gevonden specificaties en bouwwijzen zo nauwkeurig mogelijk samen.
-- BELANGRIJK FOTODOCUMENTATIE / MODELLEN: Indien er MEERDERE verschillende modellen of uitvoeringen worden vermeld (bijv. 'Model Vedette' én 'Model Vedette 936'), maak dan voor ELK model een AFZONDERLIJK kopje met de bijbehorende specifieke gegevens (zoals buizen, afmetingen en bouwjaar). Voeg ze niet samen onder één algemene noemer.
-- Als er personen worden genoemd, controleer of er meerdere personen bestaan met dezelfde achternaam en maak een duidelijk onderscheid tussen hen.
+STRIKTE INSTRUCTIES VOOR MODEL- EN BRONANALYSE:
+1. **ELK MODEL APART:** Als er meerdere modellen of uitvoeringen voorkomen (bijv. 'Model Vedette' én 'Model Vedette 936'), maak dan voor ELK model een AFZONDERLIJK kopje.
+2. **GEBRUIK EXACTE GEGEVENS UIT DE BESTANDEN:** Lees en bekijk de meegeleverde originele documenten zorgvuldig. Neem ALLE specifieke gegevens (zoals exacte jaartallen, buizenbezetting, afmetingen, golfbanden en serie-aanduidingen) over zoals ze LETTERLIJK in het document of op de afbeelding staan.
+3. **GEEN FANTASIE OF GISSINGEN:** Neem geen jaartallen of buizentypes aan die niet in het originele document staan. Als een document vermeldt "Jaar: 1934-1935" of "Buizen: 2A7 58 2A6 2A5 80", neem deze feiten dan EXACT zo over in het rapport.
 
 GEBRUIKERSVRAAG: {st.session_state.huidige_vraag}
 """
             payload = [onderzoeks_prompt]
-            sheet_data = getattr(st.session_state, 'sheet_dossier_data', [])
 
-            tekst_gebundeld = "\n--- BRONMATERIAAL & METADATA ---\n"
+            # 1. Metadata uit Google Sheet toevoegen
+            sheet_data = getattr(st.session_state, 'sheet_dossier_data', [])
+            tekst_gebundeld = "\n--- INHOUDSOPGAVE METADATA ---\n"
             for r in sheet_data:
                 tekst_gebundeld += f"Bestand: {r.get('Bestandsnaam', '')} | Personen: {r.get('Genoemde Personen', '')} | Inhoud: {r.get('Inhoud & Cijfers (NL)', '')}\n"
             payload.append(tekst_gebundeld)
+
+            # 2. De originele PDF/Afbeelding bestanden van de TOP-dossiers rechtstreeks downloaden en toevoegen
+            top_dossier_ids = st.session_state.geselecteerde_doc_ids[:3]  # Pak de top 3 hoogst scorende dossiers
+            toegevoegde_bestanden_count = 0
+
+            for p in st.session_state.blader_paginas:
+                if p.get("doc_id") in top_dossier_ids and toegevoegde_bestanden_count < 5:
+                    file_id = p.get("id")
+                    file_name = p.get("naam", "").lower()
+                    mime_type = p.get("mime", "")
+
+                    # Bepaal het MIME type als het niet bekend is
+                    if not mime_type or mime_type == 'application/octet-stream':
+                        if file_name.endswith('.pdf'):
+                            mime_type = 'application/pdf'
+                        elif file_name.endswith('.jpg') or file_name.endswith('.jpeg'):
+                            mime_type = 'image/jpeg'
+                        elif file_name.endswith('.png'):
+                            mime_type = 'image/png'
+
+                    # Download het bestand vanuit Google Drive als binary data
+                    if file_id and mime_type in ['application/pdf', 'image/jpeg', 'image/png']:
+                        try:
+                            file_bytes = drive_service.files().get_media(fileId=file_id).execute()
+                            
+                            # Voeg het fysieke bestand direct toe aan de Gemini Payload
+                            payload.append(types.Part.from_bytes(
+                                data=file_bytes,
+                                mime_type=mime_type
+                            ))
+                            toegevoegde_bestanden_count += 1
+                        except Exception as e_dl:
+                            st.caption(f"Kon {file_name} niet rechtstreeks downloaden: {e_dl}")
 
             st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
             analyse_response = genereer_met_retry(ai_client, MODEL_NAAM, payload)

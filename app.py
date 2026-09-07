@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.6.6 (Dossier-Aggregatie & Ruis-Filtering)"
+APP_VERSION = "v1.6.5 (Geoptimaliseerde Ruis-Filtering & Snelheid)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -84,6 +84,7 @@ MODEL_NAAM = bepaal_werkend_model(ai_client)
 def genereer_met_retry(client, model, contents, max_retries=4, config=None):
     """
     Genereert content via Gemini met retry bij limieten.
+    Als config meegegeven wordt, wordt deze gebruikt (bv. voor temperature=0.0).
     """
     for poging in range(max_retries):
         try:
@@ -151,6 +152,7 @@ with col1:
         height=100
     )
 with col2:
+    # Aangepast: Standaard ingesteld op 15 (minimaal risico op API-limieten)
     max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=15, step=5)
 
 btn_col1, btn_col2 = st.columns([2, 1])
@@ -185,7 +187,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. QUERY ONTLEDING & DYNAMISCHE SCORING (DOSSIER AGGREGATIE)
+# 4. QUERY ONTLEDING & DYNAMISCHE SCORING (MEERTAAL SYNONIEMEN & DETERMINISTISCH)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -214,18 +216,13 @@ GEBRUIKERSVRAAG: "{vraag_orig}"
 CRUCIALE REGELS VOOR DE CATEGORIEËN:
 1. "personen": Extraheer persoonsnamen EN genereer bekende spellingvariaties voor voornamen/achternamen (bijv. "emile" -> ["emile", "emiel"]).
 2. "specifieke_termen": Extraheer uitsluitend de MEEST SPECIFIEKE en UNIEKE identificatierestanten, modellers, typenummers EN ALLE DATUMS/JAARTALLEN (zoals "1934", "1940", "10 mei 1940"). DATUMS EN JAARTALLEN MOGEN NOOIT ONDER RUIS VALLEN!
-3. "generieke_termen":
-       - Extraheer merknamen, zakelijke onderwerpen en unieke combinatiefrases.
-       - ESSENTIËLE FINANCIËLE EN INHOUDELIJKE CONCEPTEN / ACTIEWOORDEN:
-         Neem termen zoals "betaald", "uitbetaling", "vergoeding", "bedrag", "persoon", "naam", "grootte", "oorlogsschade", "financiële toestand", "overleed", "bestuursleden" ALTIJD op in deze lijst van generieke_termen!
+3. "generieke_termen": Extraheer specifieke merknamen, eigenmerknamen, zakelijke onderwerpen of unieke combinatiefrases (bijv. ["radio belge de construction", "financiële toestand"]). PURE ALGEMENE WOORDEN ZOALS "firma", "bedrijf" OF "vennootschap" HIER NIET PLAATSEN!
 4. "synoniemen_documenttypes": OMDAT BELGISCHE ARCHIEVEN UIT DIE TIJD VAAK FRANSTALIG WAREN (STAATSBLAD / MONITEUR), VOEG JE ZOWEL NEDERLANDSE ALS FRANSE SYNONIEMEN TOE.
    - Bij financiën / balansen / toestand: ["staatsblad", "moniteur", "balans", "bilan", "jaarrekening", "comptes annuels", "kapitaal", "capital", "concordaat", "concordat", "inventaris", "inventaire"]
    - Bij oprichting / statuten: ["oprichting", "statuts", "acte", "akte", "annexes", "bijlagen"]
-5. "ruis_genegeerd":
-       - UITSLUITEND betekenisloze grammaticale lidwoorden, voorzetsels, koppeltekens en hulpwerkwoorden van staat (zoals "hoe", "was", "de", "het", "van", "tussen", "en", "werd", "geef", "me", "dat").
-       - STRIKT VERBODEN IN RUIS: Inhoudelijke woorden en begrippen zoals "betaald", "persoon", "naam", "bedrag", "grootte", "overleed" of "bestuursleden" MOGEN NOOIT ONDER RUIS VALLEN!
+5. "ruis_genegeerd": Grammaticale lidwoorden, voorzetsels, vraagwoorden EN algemene betekenisloze bedrijfsaanduidingen (zoals "hoe", "was", "de", "firma", "bedrijf", "van", "tussen", "en").
+   WAARSCHUWING: Elk woord mag maar in EXACT EÉN categorie voorkomen!
 
-    WAARSCHUWING: Elk woord mag maar in EXACT EÉN categorie voorkomen!
 Geef UITSLUITEND een geldig JSON-object terug:
 {{
   "personen": [],
@@ -236,6 +233,8 @@ Geef UITSLUITEND een geldig JSON-object terug:
 }}
 """
             extracted_data = None
+
+            # Deterministische configuratie voor constante query-ontleding
             zero_temp_config = types.GenerateContentConfig(temperature=0.0)
 
             try:
@@ -244,7 +243,7 @@ Geef UITSLUITEND een geldig JSON-object terug:
                 if json_match:
                     extracted_data = json.loads(json_match.group(0))
             except Exception as e:
-                st.error(f"⛔ **API-Limiet of Netwerkfout bij AI Query-ontleding:**\n\n{e}")
+                st.error(f"⛔ **API-Limiet of Netwerkfout bij AI Query-ontleding:**\n\{e}")
                 st.session_state.start_zoekopdracht = False
                 st.stop()
 
@@ -263,16 +262,21 @@ Geef UITSLUITEND een geldig JSON-object terug:
             spec_termen = [normaliseer_tekst(s) for s in extracted_data.get("specifieke_termen", []) if len(s) >= 1]
             gen_termen = [normaliseer_tekst(g) for g in extracted_data.get("generieke_termen", []) if len(g) >= 2]
             
+            # Verwijder losse algemene woorden ("firma", "bedrijf") uit generieke termen voor schone scoring
             algemene_woorden = {'firma', 'bedrijf', 'vennootschap', 'maatschappij', 'nv', 'sa', 'bv'}
             gen_termen = [gt for gt in gen_termen if gt not in algemene_woorden]
 
             syn_termen = [normaliseer_tekst(syn) for syn in extracted_data.get("synoniemen_documenttypes", []) if len(syn) >= 2]
             raw_ruis = [normaliseer_tekst(r) for r in extracted_data.get("ruis_genegeerd", [])]
 
+            # ------------------------------------------------------------------
+            # GEGARANDEERDE PYTHON RUIS-OPSCHONING (GEEN OVERLAP)
+            # ------------------------------------------------------------------
             alle_nuttige_zoektermen = set(harde_namen + spec_termen + gen_termen + syn_termen)
             
             schone_ruis = []
             for r in raw_ruis:
+                # Voeg toe als ruis tenzij het onderdeel uitmaakt van een échte zoekterm
                 is_stiekem_zoekterm = False
                 for nuttig in alle_nuttige_zoektermen:
                     if r == nuttig or (len(r) > 3 and r in nuttig.split()):
@@ -308,13 +312,16 @@ Geef UITSLUITEND een geldig JSON-object terug:
                 b_naam_norm = normaliseer_tekst(b_naam)
 
                 score = 0
+                heeft_match = False
 
                 # 1. Personen matching
                 for hn in harde_namen:
                     if hn in b_naam_norm:
-                        score += 10000
+                        score += 20000
+                        heeft_match = True
                     elif hn in pers:
                         score += 8000
+                        heeft_match = True
                     elif hn in ond or hn in inhoud:
                         score += 3000
 
@@ -322,11 +329,13 @@ Geef UITSLUITEND een geldig JSON-object terug:
                 for st_term in specifieke_termen:
                     if st_term in b_naam_norm:
                         score += 25000
+                        heeft_match = True
                     elif st_term in ond or st_term in inhoud:
                         if st_term.isdigit() and len(st_term) == 4:
-                            score += 1000
+                            score += 12000
                         else:
                             score += 8000
+                        heeft_match = True
 
                 # 3. Generieke merknamen / Inhoudsonderwerpen matching
                 for gt_term in generieke_termen:
@@ -335,15 +344,16 @@ Geef UITSLUITEND een geldig JSON-object terug:
                     elif gt_term in ond or gt_term in inhoud:
                         score += 1500
 
-                # 4. NL + FR Synoniemen matching
+                # 4. NL + FR Synoniemen (Staatsblad, Moniteur, Bilan, Balans) matching
                 for syn_term in synoniemen_termen:
                     if syn_term in b_naam_norm:
                         score += 15000
+                        heeft_match = True
                     elif syn_term in ond or syn_term in inhoud:
                         score += 9000
+                        heeft_match = True
 
                 if score > 0:
-                    # AGGREGATIE LOGICA: Telt alle pagina's binnen hetzelfde dossier bij elkaar op
                     dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + score
 
             gesorteerde_dossiers = [d_id for d_id, sc in sorted(dossier_scores.items(), key=lambda x: x[1], reverse=True)]
@@ -357,3 +367,376 @@ Geef UITSLUITEND een geldig JSON-object terug:
                     gesorteerde_dossiers = list(set(str(row.get('Document_ID', '')).strip() or f"SINGLE_{str(row.get('Bestandsnaam', '')).strip()}" for row in data))
 
             st.session_state.geselecteerde_doc_ids = gesorteerde_dossiers[:max_dossiers]
+
+        with st.spinner("Stap 2b/3: Bestanden ophalen uit Google Drive..."):
+            sheet_dossier_data = []
+            gezochte_bestanden = []
+            
+            for row in data:
+                b_naam = str(row.get('Bestandsnaam', '')).strip()
+                doc_id = str(row.get('Document_ID', '')).strip()
+                if not doc_id:
+                    doc_id = f"SINGLE_{b_naam}"
+
+                if doc_id in st.session_state.geselecteerde_doc_ids:
+                    sheet_dossier_data.append(row)
+                    if b_naam:
+                        schoon_naam = b_naam.split('/')[-1]
+                        gezochte_bestanden.append((doc_id, schoon_naam))
+
+            blader_lijst = []
+            if gezochte_bestanden:
+                batch_size = 40
+                drive_map = {}
+                unieke_zoeknamen = list(set([naam for _, naam in gezochte_bestanden]))
+
+                for i in range(0, len(unieke_zoeknamen), batch_size):
+                    batch = unieke_zoeknamen[i:i + batch_size]
+                    namen_query = " or ".join([f"name = '{naam}'" for naam in batch])
+                    query = f"({namen_query}) and trashed = false"
+                    
+                    try:
+                        res = drive_service.files().list(
+                            q=query, 
+                            fields='files(id, name, mimeType)',
+                            pageSize=1000
+                        ).execute().get('files', [])
+                        for f in res:
+                            drive_map[f['name'].lower()] = f
+                    except Exception:
+                        pass
+                
+                for doc_id, b_schoon in gezochte_bestanden:
+                    b_key = b_schoon.lower()
+                    if b_key in drive_map:
+                        f = drive_map[b_key]
+                        if not any(item['id'] == f['id'] for item in blader_lijst):
+                            blader_lijst.append({
+                                "doc_id": doc_id, 
+                                "naam": f['name'], 
+                                "id": f['id'], 
+                                "mime": f['mimeType']
+                            })
+
+            st.session_state.blader_paginas = blader_lijst
+            st.session_state.sheet_dossier_data = sheet_dossier_data
+            st.session_state.start_zoekopdracht = False
+            st.rerun()
+
+# ------------------------------------------------------------------------------
+# 5. WEERGAVE VAN DE TEGELS (CENTERED ZOOM & PAN VIEWER)
+# ------------------------------------------------------------------------------
+if st.session_state.blader_paginas:
+    st.divider()
+    
+    with st.expander("💡 Bekijk de slimme AI Query-analyse & Genegeerde Ruis"):
+        st.markdown(f"**Originele vraag:** `{st.session_state.huidige_vraag}`")
+        if st.session_state.harde_naam_targets:
+            st.markdown(f"**Geëxtraheerde personen:** `{', '.join(st.session_state.harde_naam_targets)}`")
+        if st.session_state.specifieke_termen:
+            st.markdown(f"**Unieke / Specifieke kernbegrippen & Datums (Hoge score):** `{', '.join(st.session_state.specifieke_termen)}`")
+        if st.session_state.generieke_termen:
+            st.markdown(f"**Generieke contextbegrippen:** `{', '.join(st.session_state.generieke_termen)}`")
+        if st.session_state.synoniemen_doc_termen:
+            st.markdown(f"**📄 Geautomatiseerde document-synoniemen (NL/FR):** `{', '.join(st.session_state.synoniemen_doc_termen)}`")
+        if st.session_state.genegeerde_ruis:
+            st.markdown(f"**🚫 Automatisch genegeerde ruis:** `{', '.join(st.session_state.genegeerde_ruis)}`")
+
+    dossiers_dict = {}
+    for p in st.session_state.blader_paginas:
+        d_id = p.get("doc_id", "Dossier_Onbekend")
+        if d_id not in dossiers_dict:
+            dossiers_dict[d_id] = []
+        dossiers_dict[d_id].append(p)
+
+    for d_id in dossiers_dict:
+        dossiers_dict[d_id].sort(key=natuurlijke_sortering)
+
+    tegel_items = []
+    volgorde_ids = st.session_state.geselecteerde_doc_ids
+
+    for d_id in volgorde_ids:
+        if d_id in dossiers_dict and dossiers_dict[d_id]:
+            pagina_lijst = dossiers_dict[d_id]
+            eerste_pagina = pagina_lijst[0].copy()
+            aantal_pags = len(pagina_lijst)
+            eerste_pagina["display_label"] = f"{d_id} ({aantal_pags} pag.)" if aantal_pags > 1 else d_id
+            tegel_items.append(eerste_pagina)
+
+    st.subheader(f"🖼️ Geselecteerde Archiefdocumenten ({len(tegel_items)} dossiers • {len(st.session_state.blader_paginas)} bestanden)")
+    st.caption("Klik op een tegel om het document te bekijken.")
+
+    html_template = Template("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body { margin: 0; padding: 5px 0; font-family: sans-serif; background: transparent; }
+            .grid-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; width: 100%; }
+            .tile { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; cursor: pointer; transition: transform 0.2s; display: flex; flex-direction: column; align-items: center; overflow: hidden; }
+            .tile:hover { transform: translateY(-3px); border-color: #1a73e8; }
+            .img-container { width: 100%; height: 180px; background-color: #f5f5f5; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+            .img-container img { width: 100%; height: 100%; object-fit: cover; }
+            .tile-caption { padding: 10px 8px; font-size: 12px; font-weight: 600; color: #202124; text-align: center; width: 100%; box-sizing: border-box; }
+        </style>
+    </head>
+    <body>
+        <div class="grid-container" id="tile-grid"></div>
+        <script>
+            const tegels = $tegels_json;
+            const alleDossiers = $alle_dossiers_json;
+
+            function getImageUrl(fileId) { return "https://lh3.googleusercontent.com/d/" + fileId; }
+            function getFallbackUrl(fileId) { return "https://drive.google.com/thumbnail?id=" + fileId + "&sz=w1600"; }
+
+            function renderTiles() {
+                const grid = document.getElementById('tile-grid');
+                grid.innerHTML = '';
+                tegels.forEach((item) => {
+                    const tile = document.createElement('div');
+                    tile.className = 'tile';
+                    tile.onclick = () => openDriveOverlay(item.doc_id);
+                    tile.innerHTML = `
+                        <div class="img-container">
+                            <img src="${getImageUrl(item.id)}" onerror="this.onerror=null; this.src='${getFallbackUrl(item.id)}';" loading="lazy" />
+                        </div>
+                        <div class="tile-caption">${item.display_label || item.doc_id}</div>
+                    `;
+                    grid.appendChild(tile);
+                });
+            }
+
+            function openDriveOverlay(docId) {
+                const topDoc = window.top.document;
+                const dossierPaginas = alleDossiers[docId] || [];
+                let currentIndex = 0;
+
+                let scale = 1;
+                let pointX = 0;
+                let pointY = 0;
+                let isDragging = false;
+                let startX = 0;
+                let startY = 0;
+
+                const modal = topDoc.createElement('div');
+                modal.id = 'rbc-drive-modal';
+                modal.style.cssText = `position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background-color: rgba(0,0,0,0.92); z-index: 9999999; display: flex; flex-direction: column; font-family: sans-serif; user-select: none;`;
+
+                modal.innerHTML = `
+                    <div style="height: 50px; background: #141414; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; color: white; flex-shrink: 0; z-index: 10;">
+                        <div style="display: flex; align-items: center;">
+                            <button id="rbc-close-btn" style="background: transparent; border: none; color: white; font-size: 24px; cursor: pointer; padding: 5px 10px; margin-right: 15px;">✕</button>
+                            <div id="rbc-title-info" style="font-size: 15px; font-weight: 500;">Laden...</div>
+                        </div>
+                        <div id="rbc-zoom-controls" style="display: flex; gap: 10px; align-items: center;">
+                            <button id="rbc-reset-zoom" style="background: #333; border: 1px solid #555; color: white; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 12px;">Reset Zoom</button>
+                        </div>
+                    </div>
+                    <div id="rbc-content-body" style="position: relative; flex: 1; overflow: hidden; display: flex; align-items: center; justify-content: center; cursor: grab;">
+                    </div>
+                `;
+
+                topDoc.body.appendChild(modal);
+                topDoc.body.style.overflow = 'hidden';
+
+                function resetTransform() {
+                    scale = 1;
+                    pointX = 0;
+                    pointY = 0;
+                    applyTransform();
+                }
+
+                function applyTransform() {
+                    const img = topDoc.getElementById('rbc-img');
+                    if (img) {
+                        img.style.transform = `translate(${pointX}px, ${pointY}px) scale(${scale})`;
+                    }
+                }
+
+                function setupPanAndZoom(container, img) {
+                    container.onwheel = function(e) {
+                        e.preventDefault();
+                        const oldScale = scale;
+                        
+                        const delta = -e.deltaY;
+                        if (delta > 0) {
+                            scale *= 1.15;
+                        } else {
+                            scale /= 1.15;
+                        }
+
+                        scale = Math.min(Math.max(0.8, scale), 8);
+
+                        const factor = scale / oldScale;
+                        pointX *= factor;
+                        pointY *= factor;
+
+                        applyTransform();
+                    };
+
+                    container.onmousedown = function(e) {
+                        if (e.target.tagName === 'BUTTON' || e.target.id === 'rbc-prev-btn' || e.target.id === 'rbc-next-btn') return;
+                        e.preventDefault();
+                        isDragging = true;
+                        startX = e.clientX - pointX;
+                        startY = e.clientY - pointY;
+                        container.style.cursor = 'grabbing';
+                    };
+
+                    topDoc.onmousemove = function(e) {
+                        if (!isDragging) return;
+                        e.preventDefault();
+                        pointX = e.clientX - startX;
+                        pointY = e.clientY - startY;
+                        applyTransform();
+                    };
+
+                    topDoc.onmouseup = function() {
+                        if (isDragging) {
+                            isDragging = false;
+                            container.style.cursor = 'grab';
+                        }
+                    };
+                }
+
+                function updateViewer() {
+                    resetTransform();
+                    const item = dossierPaginas[currentIndex];
+                    const container = topDoc.getElementById('rbc-content-body');
+                    const zoomControls = topDoc.getElementById('rbc-zoom-controls');
+                    const isPdf = item.naam.toLowerCase().endsWith('.pdf') || (item.mime && item.mime.includes('pdf'));
+
+                    topDoc.getElementById('rbc-title-info').innerText = `${item.naam} (${currentIndex + 1}/${dossierPaginas.length})`;
+
+                    if (isPdf) {
+                        zoomControls.style.display = 'none';
+                        container.innerHTML = `
+                            <iframe src="https://drive.google.com/file/d/${item.id}/preview" 
+                                    style="width: 100%; height: 100%; border: none; background: #fff;">
+                            </iframe>
+                        `;
+                    } else {
+                        zoomControls.style.display = 'flex';
+                        container.innerHTML = `
+                            <div id="rbc-img-wrapper" style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden;">
+                                <img id="rbc-img" 
+                                     style="max-width: 95vw; max-height: 90vh; object-fit: contain; transform-origin: center center; box-shadow: 0 4px 25px rgba(0,0,0,0.6);" 
+                                     src="${getImageUrl(item.id)}" 
+                                     onerror="this.onerror=null; this.src='${getFallbackUrl(item.id)}';" />
+                            </div>
+                            <div id="rbc-prev-btn" style="position: fixed; left: 20px; top: 50%; transform: translateY(-50%); font-size: 36px; color: white; cursor: pointer; user-select: none; background: rgba(0,0,0,0.5); padding: 8px 16px; border-radius: 50%; z-index: 20;">‹</div>
+                            <div id="rbc-next-btn" style="position: fixed; right: 20px; top: 50%; transform: translateY(-50%); font-size: 36px; color: white; cursor: pointer; user-select: none; background: rgba(0,0,0,0.5); padding: 8px 16px; border-radius: 50%; z-index: 20;">›</div>
+                        `;
+
+                        const img = topDoc.getElementById('rbc-img');
+                        setupPanAndZoom(container, img);
+
+                        topDoc.getElementById('rbc-prev-btn').onclick = (e) => { e.stopPropagation(); if (currentIndex > 0) { currentIndex--; updateViewer(); } };
+                        topDoc.getElementById('rbc-next-btn').onclick = (e) => { e.stopPropagation(); if (currentIndex < dossierPaginas.length - 1) { currentIndex++; updateViewer(); } };
+                        topDoc.getElementById('rbc-reset-zoom').onclick = () => resetTransform();
+                    }
+                }
+
+                function sluitModal() { 
+                    modal.remove(); 
+                    topDoc.body.style.overflow = 'auto'; 
+                    topDoc.onmousemove = null;
+                    topDoc.onmouseup = null;
+                }
+
+                topDoc.getElementById('rbc-close-btn').onclick = sluitModal;
+
+                updateViewer();
+            }
+            renderTiles();
+        </script>
+    </body>
+    </html>
+    """)
+
+    grid_html = html_template.substitute(
+        tegels_json=json.dumps(tegel_items),
+        alle_dossiers_json=json.dumps(dossiers_dict)
+    )
+
+    aantal_tegels = len(tegel_items)
+    aantal_rijen = math.ceil(aantal_tegels / 5) if aantal_tegels > 0 else 1
+    components.html(grid_html, height=(aantal_rijen * 240) + 15, scrolling=False)
+
+# ------------------------------------------------------------------------------
+# 6. MULTIMODAL HISTORISCHE ANALYSE VIA GEMINI (DETERMINISTISCH MET TEMP = 0.0)
+# ------------------------------------------------------------------------------
+if st.session_state.blader_paginas and not st.session_state.chat_historie:
+    with st.spinner("Stap 3/3: Originele PDF's/Afbeeldingen ophalen & Historische analyse genereren..."):
+        try:
+            # Strakke, gestructureerde prompt voor maximale detailgetrouwheid
+            onderzoeks_prompt = f"""
+Jij bent een zeer nauwkeurige en uitputtende historisch archivarisexpert voor een Belgisch archief.
+Analyseer de meegeleverde originele bestanden (PDF's / afbeeldingen) EN de metadata-samenvattingen uitermate grondig en op een deterministische, feitelijke manier.
+
+STRUCTUUREISEN VOOR HET RAPPORT:
+- Vermeld ALLE concrete financiële cijfers, kapitaalbedragen, schulden en exacte data.
+- Bied een volledige chronologische opbouw (oprichting, kapitaalherstructureringen, verhuizingen/vestigingen).
+- Bij voorraden en inventarissen: Noem expliciet de kwaliteitsindelingen (1e t/m 4e keus), afschrijvingspercentages en types.
+- Bij schade en bombardementen: Vermeld ALTIJD zowel het TOTAALBEDRAG als de GEDETAILLEERDE SUBBEDRAGEN/OPSPLITSING (zoals voorraden, machines, kantoormeubelen, expertisekosten).
+- Sluit af met een heldere synthese/conclusie.
+
+GEBRUIKERSVRAAG: {st.session_state.huidige_vraag}
+"""
+            payload = [onderzoeks_prompt]
+
+            sheet_data = getattr(st.session_state, 'sheet_dossier_data', [])
+            tekst_gebundeld = "\n--- INHOUDSOPGAVE METADATA ---\n"
+            for r in sheet_data:
+                tekst_gebundeld += f"Bestand: {r.get('Bestandsnaam', '')} | Personen: {r.get('Genoemde Personen', '')} | Inhoud: {r.get('Inhoud & Cijfers (NL)', '')}\n"
+            payload.append(tekst_gebundeld)
+
+            top_dossier_ids = st.session_state.geselecteerde_doc_ids[:3]
+            toegevoegde_bestanden_count = 0
+
+            for p in st.session_state.blader_paginas:
+                if p.get("doc_id") in top_dossier_ids and toegevoegde_bestanden_count < 5:
+                    file_id = p.get("id")
+                    file_name = p.get("naam", "").lower()
+                    mime_type = p.get("mime", "")
+
+                    if not mime_type or mime_type == 'application/octet-stream':
+                        if file_name.endswith('.pdf'):
+                            mime_type = 'application/pdf'
+                        elif file_name.endswith('.jpg') or file_name.endswith('.jpeg'):
+                            mime_type = 'image/jpeg'
+                        elif file_name.endswith('.png'):
+                            mime_type = 'image/png'
+
+                    if file_id and mime_type in ['application/pdf', 'image/jpeg', 'image/png']:
+                        try:
+                            file_bytes = drive_service.files().get_media(fileId=file_id).execute()
+                            
+                            payload.append(types.Part.from_bytes(
+                                data=file_bytes,
+                                mime_type=mime_type
+                            ))
+                            toegevoegde_bestanden_count += 1
+                        except Exception as e_dl:
+                            st.caption(f"Kon {file_name} niet rechtstreeks downloaden: {e_dl}")
+
+            st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
+
+            # CRUCIAAL: Dwing temperature=0.0 af voor identieke, consistente antwoorden
+            analysis_config = types.GenerateContentConfig(
+                temperature=0.0
+            )
+
+            analyse_response = genereer_met_retry(ai_client, MODEL_NAAM, payload, config=analysis_config)
+            st.session_state.chat_historie.append(("assistant", analyse_response.text))
+            gc.collect()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Fout bij historische analyse: {e}")
+
+if st.session_state.chat_historie:
+    st.divider()
+    st.subheader("📑 Historisch Onderzoeksrapport")
+    for rol, tekst in st.session_state.chat_historie:
+        with st.chat_message(rol):
+            st.write(tekst)

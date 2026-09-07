@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.6.5 (Geoptimaliseerde Ruis-Filtering & Snelheid)"
+APP_VERSION = "v1.6.6 (Fix JavaScript Template Strings & Versie-update)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -243,7 +243,7 @@ Geef UITSLUITEND een geldig JSON-object terug:
                 if json_match:
                     extracted_data = json.loads(json_match.group(0))
             except Exception as e:
-                st.error(f"⛔ **API-Limiet of Netwerkfout bij AI Query-ontleding:**\n\{e}")
+                st.error(f"⛔ **API-Limiet of Netwerkfout bij AI Query-ontleding:**\n\n{e}")
                 st.session_state.start_zoekopdracht = False
                 st.stop()
 
@@ -498,9 +498,9 @@ if st.session_state.blader_paginas:
                     tile.onclick = () => openDriveOverlay(item.doc_id);
                     tile.innerHTML = `
                         <div class="img-container">
-                            <img src="${getImageUrl(item.id)}" onerror="this.onerror=null; this.src='${getFallbackUrl(item.id)}';" loading="lazy" />
+                            <img src="$$${getImageUrl(item.id)}" onerror="this.onerror=null; this.src='$$${getFallbackUrl(item.id)}';" loading="lazy" />
                         </div>
-                        <div class="tile-caption">${item.display_label || item.doc_id}</div>
+                        <div class="tile-caption">$${item.display_label || item.doc_id}</div>
                     `;
                     grid.appendChild(tile);
                 });
@@ -549,7 +549,7 @@ if st.session_state.blader_paginas:
                 function applyTransform() {
                     const img = topDoc.getElementById('rbc-img');
                     if (img) {
-                        img.style.transform = `translate(${pointX}px, ${pointY}px) scale(${scale})`;
+                        img.style.transform = `translate($${pointX}px, $${pointY}px) scale($${scale})`;
                     }
                 }
 
@@ -606,12 +606,12 @@ if st.session_state.blader_paginas:
                     const zoomControls = topDoc.getElementById('rbc-zoom-controls');
                     const isPdf = item.naam.toLowerCase().endsWith('.pdf') || (item.mime && item.mime.includes('pdf'));
 
-                    topDoc.getElementById('rbc-title-info').innerText = `${item.naam} (${currentIndex + 1}/${dossierPaginas.length})`;
+                    topDoc.getElementById('rbc-title-info').innerText = `$${item.naam} ($${currentIndex + 1}/$${dossierPaginas.length})`;
 
                     if (isPdf) {
                         zoomControls.style.display = 'none';
                         container.innerHTML = `
-                            <iframe src="https://drive.google.com/file/d/${item.id}/preview" 
+                            <iframe src="https://drive.google.com/file/d/$${item.id}/preview" 
                                     style="width: 100%; height: 100%; border: none; background: #fff;">
                             </iframe>
                         `;
@@ -621,8 +621,8 @@ if st.session_state.blader_paginas:
                             <div id="rbc-img-wrapper" style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden;">
                                 <img id="rbc-img" 
                                      style="max-width: 95vw; max-height: 90vh; object-fit: contain; transform-origin: center center; box-shadow: 0 4px 25px rgba(0,0,0,0.6);" 
-                                     src="${getImageUrl(item.id)}" 
-                                     onerror="this.onerror=null; this.src='${getFallbackUrl(item.id)}';" />
+                                     src="$$${getImageUrl(item.id)}" 
+                                     onerror="this.onerror=null; this.src='$$${getFallbackUrl(item.id)}';" />
                             </div>
                             <div id="rbc-prev-btn" style="position: fixed; left: 20px; top: 50%; transform: translateY(-50%); font-size: 36px; color: white; cursor: pointer; user-select: none; background: rgba(0,0,0,0.5); padding: 8px 16px; border-radius: 50%; z-index: 20;">‹</div>
                             <div id="rbc-next-btn" style="position: fixed; right: 20px; top: 50%; transform: translateY(-50%); font-size: 36px; color: white; cursor: pointer; user-select: none; background: rgba(0,0,0,0.5); padding: 8px 16px; border-radius: 50%; z-index: 20;">›</div>

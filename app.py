@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.6.2 (Smart Scoring, Date Detection & Document Synonyms)"
+APP_VERSION = "v1.6.3 (Franstalige Staatsblad & Balans Synoniemen)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -179,7 +179,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. QUERY ONTLEDING & DYNAMISCHE SCORING (V1.6.2 SLIMMER)
+# 4. QUERY ONTLEDING & DYNAMISCHE SCORING (MET MEERTAAL/FRANSE SYNONIEMEN)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -197,11 +197,11 @@ if st.session_state.start_zoekopdracht:
                 st.session_state.start_zoekopdracht = False
                 st.stop()
 
-        with st.spinner("Stap 1b/3: Dynamische AI-ontleding (Jaartallen & Synoniemen detectie)..."):
+        with st.spinner("Stap 1b/3: AI-ontleding (NL + FR Synoniemen & Datums)..."):
             vraag_orig = st.session_state.huidige_vraag
 
             prompt_extraction = f"""
-Jij bent een intelligente zoekarchivaris voor een Belgisch/Nederlands archief. Ontleed de onderstaande zoekvraag.
+Jij bent een intelligente zoekarchivaris voor een Belgisch historisch archief uit de jaren 1930-1950. Ontleed de onderstaande zoekvraag.
 
 GEBRUIKERSVRAAG: "{vraag_orig}"
 
@@ -209,7 +209,9 @@ CRUCIALE REGELS:
 1. "personen": Extraheer persoonsnamen EN genereer bekende spellingvariaties voor voornamen/achternamen (bijv. "emile" -> ["emile", "emiel"]).
 2. "specifieke_termen": Extraheer uitsluitend de MEEST SPECIFIEKE en UNIEKE identificatierestanten, modellers, typenummers EN ALLE DATUMS/JAARTALLEN (zoals "1934", "1940", "10 mei 1940"). DATUMS EN JAARTALLEN MOGEN NOOIT ONDER RUIS VALLEN!
 3. "generieke_termen": Extraheer algemene merknamen, firmanamen, vakgebieden of onderwerpen (bijv. ["radio belge de construction", "financiële toestand", "bedrijf"]).
-4. "synoniemen_documenttypes": Als de vraag gaat over financiën, status, oprichting of juridische zaken, voeg dan automatisch gerelateerde termen toe (zoals ["staatsblad", "moniteur", "balans", "jaarrekening", "kapitaal", "concordaat", "inventaris"]).
+4. "synoniemen_documenttypes": OMDAT BELGISCHE ARCHIEVEN UIT DIE TIJD VAAK FRANSTALIG WAREN (STAATSBLAD / MONITEUR), VOEG JE ZOWEL NEDERLANDSE ALS FRANSE SYNONIEMEN TOE.
+   - Bij financiën / balansen / toestand: ["staatsblad", "moniteur", "balans", "bilan", "jaarrekening", "comptes annuels", "kapitaal", "capital", "concordaat", "concordat", "inventaris", "inventaire"]
+   - Bij oprichting / statuten: ["oprichting", "statuts", "acte", "akte", "annexes", "bijlagen"]
 5. "ruis_genegeerd": UITSLUITEND grammaticale vulwoorden en vraagwoorden (zoals "wat", "weet", "je", "over", "hoe", "was", "de", "tussen", "en").
 
 Geef UITSLUITEND een geldig JSON-object terug:
@@ -217,7 +219,7 @@ Geef UITSLUITEND een geldig JSON-object terug:
   "personen": [],
   "specifieke_termen": ["1934", "1940"],
   "generieke_termen": ["radio belge de construction", "financiële toestand"],
-  "synoniemen_documenttypes": ["staatsblad", "moniteur", "balans", "jaarrekening"],
+  "synoniemen_documenttypes": ["staatsblad", "moniteur", "balans", "bilan", "jaarrekening", "comptes annuels", "kapitaal", "capital"],
   "ruis_genegeerd": ["hoe", "was", "de", "van", "tussen", "en"]
 }}
 """
@@ -296,7 +298,6 @@ Geef UITSLUITEND een geldig JSON-object terug:
                         score += 25000
                         heeft_match = True
                     elif st_term in ond or st_term in inhoud:
-                        # Hoge beloning voor jaartallen in inhoud & cijfers!
                         if st_term.isdigit() and len(st_term) == 4:
                             score += 12000
                         else:
@@ -310,7 +311,7 @@ Geef UITSLUITEND een geldig JSON-object terug:
                     elif gt_term in ond or gt_term in inhoud:
                         score += 1500
 
-                # 4. Automatische Synoniemen (Staatsblad, Balans, Jaarrekening) matching
+                # 4. NL + FR Synoniemen (Staatsblad, Moniteur, Bilan, Balans) matching
                 for syn_term in synoniemen_termen:
                     if syn_term in b_naam_norm:
                         score += 15000
@@ -404,7 +405,7 @@ if st.session_state.blader_paginas:
         if st.session_state.generieke_termen:
             st.markdown(f"**Generieke contextbegrippen:** `{', '.join(st.session_state.generieke_termen)}`")
         if st.session_state.synoniemen_doc_termen:
-            st.markdown(f"**📄 Geautomatiseerde document-synoniemen:** `{', '.join(st.session_state.synoniemen_doc_termen)}`")
+            st.markdown(f"**📄 Geautomatiseerde document-synoniemen (NL/FR):** `{', '.join(st.session_state.synoniemen_doc_termen)}`")
         if st.session_state.genegeerde_ruis:
             st.markdown(f"**🚫 Automatisch genegeerde ruis:** `{', '.join(st.session_state.genegeerde_ruis)}`")
 

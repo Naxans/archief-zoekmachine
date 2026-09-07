@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.6.5 (Geoptimaliseerde Ruis-Filtering & Snelheid)"
+APP_VERSION = "v1.6.7 (Fix String.Template Dollar-Escaping)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -152,7 +152,6 @@ with col1:
         height=100
     )
 with col2:
-    # Aangepast: Standaard ingesteld op 15 (minimaal risico op API-limieten)
     max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=15, step=5)
 
 btn_col1, btn_col2 = st.columns([2, 1])
@@ -234,7 +233,6 @@ Geef UITSLUITEND een geldig JSON-object terug:
 """
             extracted_data = None
 
-            # Deterministische configuratie voor constante query-ontleding
             zero_temp_config = types.GenerateContentConfig(temperature=0.0)
 
             try:
@@ -262,21 +260,16 @@ Geef UITSLUITEND een geldig JSON-object terug:
             spec_termen = [normaliseer_tekst(s) for s in extracted_data.get("specifieke_termen", []) if len(s) >= 1]
             gen_termen = [normaliseer_tekst(g) for g in extracted_data.get("generieke_termen", []) if len(g) >= 2]
             
-            # Verwijder losse algemene woorden ("firma", "bedrijf") uit generieke termen voor schone scoring
             algemene_woorden = {'firma', 'bedrijf', 'vennootschap', 'maatschappij', 'nv', 'sa', 'bv'}
             gen_termen = [gt for gt in gen_termen if gt not in algemene_woorden]
 
             syn_termen = [normaliseer_tekst(syn) for syn in extracted_data.get("synoniemen_documenttypes", []) if len(syn) >= 2]
             raw_ruis = [normaliseer_tekst(r) for r in extracted_data.get("ruis_genegeerd", [])]
 
-            # ------------------------------------------------------------------
-            # GEGARANDEERDE PYTHON RUIS-OPSCHONING (GEEN OVERLAP)
-            # ------------------------------------------------------------------
             alle_nuttige_zoektermen = set(harde_namen + spec_termen + gen_termen + syn_termen)
             
             schone_ruis = []
             for r in raw_ruis:
-                # Voeg toe als ruis tenzij het onderdeel uitmaakt van een échte zoekterm
                 is_stiekem_zoekterm = False
                 for nuttig in alle_nuttige_zoektermen:
                     if r == nuttig or (len(r) > 3 and r in nuttig.split()):
@@ -314,7 +307,6 @@ Geef UITSLUITEND een geldig JSON-object terug:
                 score = 0
                 heeft_match = False
 
-                # 1. Personen matching
                 for hn in harde_namen:
                     if hn in b_naam_norm:
                         score += 20000
@@ -325,7 +317,6 @@ Geef UITSLUITEND een geldig JSON-object terug:
                     elif hn in ond or hn in inhoud:
                         score += 3000
 
-                # 2. Specifieke termen & Jaartallen matching
                 for st_term in specifieke_termen:
                     if st_term in b_naam_norm:
                         score += 25000
@@ -337,14 +328,12 @@ Geef UITSLUITEND een geldig JSON-object terug:
                             score += 8000
                         heeft_match = True
 
-                # 3. Generieke merknamen / Inhoudsonderwerpen matching
                 for gt_term in generieke_termen:
                     if gt_term in b_naam_norm:
                         score += 3000
                     elif gt_term in ond or gt_term in inhoud:
                         score += 1500
 
-                # 4. NL + FR Synoniemen (Staatsblad, Moniteur, Bilan, Balans) matching
                 for syn_term in synoniemen_termen:
                     if syn_term in b_naam_norm:
                         score += 15000
@@ -669,7 +658,6 @@ if st.session_state.blader_paginas:
 if st.session_state.blader_paginas and not st.session_state.chat_historie:
     with st.spinner("Stap 3/3: Originele PDF's/Afbeeldingen ophalen & Historische analyse genereren..."):
         try:
-            # Strakke, gestructureerde prompt voor maximale detailgetrouwheid
             onderzoeks_prompt = f"""
 Jij bent een zeer nauwkeurige en uitputtende historisch archivarisexpert voor een Belgisch archief.
 Analyseer de meegeleverde originele bestanden (PDF's / afbeeldingen) EN de metadata-samenvattingen uitermate grondig en op een deterministische, feitelijke manier.
@@ -722,7 +710,6 @@ GEBRUIKERSVRAAG: {st.session_state.huidige_vraag}
 
             st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
 
-            # CRUCIAAL: Dwing temperature=0.0 af voor identieke, consistente antwoorden
             analysis_config = types.GenerateContentConfig(
                 temperature=0.0
             )

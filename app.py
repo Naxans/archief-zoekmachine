@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.5.2 (Noise Filtering for Generic Terms)"
+APP_VERSION = "v1.5.3 (Model Splitting & Balanced Scoring)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -173,7 +173,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. INTELLIGENTE AI QUERY EXPANSION & SCORING (v1.5.2)
+# 4. INTELLIGENTE AI QUERY EXPANSION & SCORING (v1.5.3)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -269,31 +269,31 @@ Geef UITSLUITEND een geldig JSON-object terug:
                 # 1. MATCHING OP PERSONEN
                 for hn in harde_namen:
                     if hn in b_naam_norm:
-                        score += 150000
+                        score += 15000
                         exact_filename_matches += 1
                         aantal_naam_matches += 1
                     elif hn in pers:
-                        score += 50000
+                        score += 5000
                         aantal_naam_matches += 1
                     elif hn in ond or hn in inhoud:
-                        score += 15000
+                        score += 1500
                         aantal_naam_matches += 1
 
                 # 2. MATCHING OP KERNBEGRIPPEN
                 for kt in hoofd_kernwoorden:
                     if kt in b_naam_norm:
-                        score += 100000
+                        score += 10000
                         exact_filename_matches += 1
                         aantal_kernwoord_matches += 1
                     elif kt in ond or kt in inhoud:
-                        score += 20000
+                        score += 2000
                         aantal_kernwoord_matches += 1
 
                 # 3. DYNAMISCHE MULTIPLIER & GEBALANCEERDE AFSTRAFFING
                 multiplier = 1.0
 
                 if exact_filename_matches > 0:
-                    multiplier += (exact_filename_matches * 5.0)
+                    multiplier += (exact_filename_matches * 1.5)
 
                 if hoofd_kernwoorden and aantal_kernwoord_matches == 0 and aantal_naam_matches == 0:
                     score = score * 0.01
@@ -613,6 +613,7 @@ Analyseer de onderstaande bronteksten en geef een gedetailleerd antwoord op de v
 
 BELANGRIJKE INSTRUCTIE MET BETREKKING TOT PERSONEN & MODELLEN:
 - Als er specifiek over radio-modellen, apparaten of technische documentatie wordt gevraagd, vat de gevonden specificaties en bouwwijzen zo nauwkeurig mogelijk samen.
+- BELANGRIJK FOTODOCUMENTATIE / MODELLEN: Indien er MEERDERE verschillende modellen of uitvoeringen worden vermeld (bijv. 'Model Vedette' én 'Model Vedette 936'), maak dan voor ELK model een AFZONDERLIJK kopje met de bijbehorende specifieke gegevens (zoals buizen, afmetingen en bouwjaar). Voeg ze niet samen onder één algemene noemer.
 - Als er personen worden genoemd, controleer of er meerdere personen bestaan met dezelfde achternaam en maak een duidelijk onderscheid tussen hen.
 
 GEBRUIKERSVRAAG: {st.session_state.huidige_vraag}

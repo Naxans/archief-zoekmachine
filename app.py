@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.6.5 (Geoptimaliseerde Ruis-Filtering & Snelheid)"
+APP_VERSION = "v1.6.6 (Geoptimaliseerde Ruis-Filtering & Snelheid)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -216,13 +216,19 @@ GEBRUIKERSVRAAG: "{vraag_orig}"
 CRUCIALE REGELS VOOR DE CATEGORIEËN:
 1. "personen": Extraheer persoonsnamen EN genereer bekende spellingvariaties voor voornamen/achternamen (bijv. "emile" -> ["emile", "emiel"]).
 2. "specifieke_termen": Extraheer uitsluitend de MEEST SPECIFIEKE en UNIEKE identificatierestanten, modellers, typenummers EN ALLE DATUMS/JAARTALLEN (zoals "1934", "1940", "10 mei 1940"). DATUMS EN JAARTALLEN MOGEN NOOIT ONDER RUIS VALLEN!
-3. "generieke_termen": Extraheer specifieke merknamen, eigenmerknamen, zakelijke onderwerpen of unieke combinatiefrases (bijv. ["radio belge de construction", "financiële toestand"]). PURE ALGEMENE WOORDEN ZOALS "firma", "bedrijf" OF "vennootschap" HIER NIET PLAATSEN!
+#3. "generieke_termen": Extraheer specifieke merknamen, eigenmerknamen, zakelijke onderwerpen of unieke combinatiefrases (bijv. ["radio belge de construction", "financiële toestand"]). PURE ALGEMENE WOORDEN ZOALS "firma", "bedrijf" OF "vennootschap" HIER NIET PLAATSEN!
+3. "generieke_termen":
+       - Extraheer merknamen, zakelijke onderwerpen en unieke combinatiefrases.
+       - ESSENTIËLE FINANCIËLE EN INHOUDELIJKE CONCEPTEN / ACTIEWOORDEN:
+         Neem termen zoals "betaald", "uitbetaling", "vergoeding", "bedrag", "persoon", "naam", "grootte", "oorlogsschade", "financiële toestand", "overleed", "bestuursleden" ALTIJD op in deze lijst van generieke_termen!
 4. "synoniemen_documenttypes": OMDAT BELGISCHE ARCHIEVEN UIT DIE TIJD VAAK FRANSTALIG WAREN (STAATSBLAD / MONITEUR), VOEG JE ZOWEL NEDERLANDSE ALS FRANSE SYNONIEMEN TOE.
    - Bij financiën / balansen / toestand: ["staatsblad", "moniteur", "balans", "bilan", "jaarrekening", "comptes annuels", "kapitaal", "capital", "concordaat", "concordat", "inventaris", "inventaire"]
    - Bij oprichting / statuten: ["oprichting", "statuts", "acte", "akte", "annexes", "bijlagen"]
-5. "ruis_genegeerd": Grammaticale lidwoorden, voorzetsels, vraagwoorden EN algemene betekenisloze bedrijfsaanduidingen (zoals "hoe", "was", "de", "firma", "bedrijf", "van", "tussen", "en").
+#5. "ruis_genegeerd": Grammaticale lidwoorden, voorzetsels, vraagwoorden EN algemene betekenisloze bedrijfsaanduidingen (zoals "hoe", "was", "de", "firma", "bedrijf", "van", "tussen", "en").
+5. "ruis_genegeerd":
+       - UITSLUITEND betekenisloze grammaticale lidwoorden, voorzetsels, koppeltekens en hulpwerkwoorden van staat (zoals "hoe", "was", "de", "het", "van", "tussen", "en", "werd", "geef", "me", "dat").
+       - STRIKT VERBODEN IN RUIS: Inhoudelijke woorden en begrippen zoals "betaald", "persoon", "naam", "bedrag", "grootte", "overleed" of "bestuursleden" MOGEN NOOIT ONDER RUIS VALLEN!
    WAARSCHUWING: Elk woord mag maar in EXACT EÉN categorie voorkomen!
-
 Geef UITSLUITEND een geldig JSON-object terug:
 {{
   "personen": [],

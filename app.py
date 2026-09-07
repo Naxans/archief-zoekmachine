@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.6.3 (Franstalige Staatsblad & Balans Synoniemen)"
+APP_VERSION = "v1.6.4 (Deterministische & Consistente Historische Analyse)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -81,10 +81,17 @@ def bepaal_werkend_model(client):
 
 MODEL_NAAM = bepaal_werkend_model(ai_client)
 
-def genereer_met_retry(client, model, contents, max_retries=4):
+def genereer_met_retry(client, model, contents, max_retries=4, config=None):
+    """
+    Genereert content via Gemini met retry bij limieten.
+    Als config meegegeven wordt, wordt deze gebruikt (bv. voor temperature=0.0).
+    """
     for poging in range(max_retries):
         try:
-            return client.models.generate_content(model=model, contents=contents)
+            if config:
+                return client.models.generate_content(model=model, contents=contents, config=config)
+            else:
+                return client.models.generate_content(model=model, contents=contents)
         except Exception as e:
             err_msg = str(e)
             if "503" in err_msg or "UNAVAILABLE" in err_msg or "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
@@ -179,7 +186,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. QUERY ONTLEDING & DYNAMISCHE SCORING (MET MEERTAAL/FRANSE SYNONIEMEN)
+# 4. QUERY ONTLEDING & DYNAMISCHE SCORING (MEERTAAL SYNONIEMEN & DETERMINISTISCH)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -225,8 +232,11 @@ Geef UITSLUITEND een geldig JSON-object terug:
 """
             extracted_data = None
 
+            # Deterministische configuratie voor constante query-ontleding
+            zero_temp_config = types.GenerateContentConfig(temperature=0.0)
+
             try:
-                res = genereer_met_retry(ai_client, MODEL_NAAM, prompt_extraction)
+                res = genereer_met_retry(ai_client, MODEL_NAAM, prompt_extraction, config=zero_temp_config)
                 json_match = re.search(r'\{.*\}', res.text, re.DOTALL)
                 if json_match:
                     extracted_data = json.loads(json_match.group(0))
@@ -631,14 +641,22 @@ if st.session_state.blader_paginas:
     components.html(grid_html, height=(aantal_rijen * 240) + 15, scrolling=False)
 
 # ------------------------------------------------------------------------------
-# 6. MULTIMODAL HISTORISCHE ANALYSE VIA GEMINI (DIRECT DRIVE FILE READING)
+# 6. MULTIMODAL HISTORISCHE ANALYSE VIA GEMINI (DETERMINISTISCH MET TEMP = 0.0)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas and not st.session_state.chat_historie:
     with st.spinner("Stap 3/3: Originele PDF's/Afbeeldingen ophalen & Historische analyse genereren..."):
         try:
+            # Strakke, gestructureerde prompt voor maximale detailgetrouwheid
             onderzoeks_prompt = f"""
-Jij bent een zeer nauwkeurige historisch archivarisexpert voor een Belgisch archief.
-Analyseer de meegeleverde originele bestanden (PDF's / afbeeldingen) EN de metadata-samenvattingen grondig en geef een gedetailleerd antwoord op de vraag.
+Jij bent een zeer nauwkeurige en uitputtende historisch archivarisexpert voor een Belgisch archief.
+Analyseer de meegeleverde originele bestanden (PDF's / afbeeldingen) EN de metadata-samenvattingen uitermate grondig en op een deterministische, feitelijke manier.
+
+STRUCTUUREISEN VOOR HET RAPPORT:
+- Vermeld ALLE concrete financiële cijfers, kapitaalbedragen, schulden en exacte data.
+- Bied een volledige chronologische opbouw (oprichting, kapitaalherstructureringen, verhuizingen/vestigingen).
+- Bij voorraden en inventarissen: Noem expliciet de kwaliteitsindelingen (1e t/m 4e keus), afschrijvingspercentages en types.
+- Bij schade en bombardementen: Vermeld ALTIJD zowel het TOTAALBEDRAG als de GEDETAILLEERDE SUBBEDRAGEN/OPSPLITSING (zoals voorraden, machines, kantoormeubelen, expertisekosten).
+- Sluit af met een heldere synthese/conclusie.
 
 GEBRUIKERSVRAAG: {st.session_state.huidige_vraag}
 """
@@ -680,7 +698,13 @@ GEBRUIKERSVRAAG: {st.session_state.huidige_vraag}
                             st.caption(f"Kon {file_name} niet rechtstreeks downloaden: {e_dl}")
 
             st.session_state.actieve_chat = ai_client.chats.create(model=MODEL_NAAM)
-            analyse_response = genereer_met_retry(ai_client, MODEL_NAAM, payload)
+
+            # CRUCIAAL: Dwing temperature=0.0 af voor identieke, consistente antwoorden
+            analysis_config = types.GenerateContentConfig(
+                temperature=0.0
+            )
+
+            analyse_response = genereer_met_retry(ai_client, MODEL_NAAM, payload, config=analysis_config)
             st.session_state.chat_historie.append(("assistant", analyse_response.text))
             gc.collect()
             st.rerun()

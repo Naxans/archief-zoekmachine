@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.5.4 (Fully Dynamic AI Query Splitting & Scoring)"
+APP_VERSION = "v1.5.5 (Strict API Error Handling & Dynamic Scoring)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -176,7 +176,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. VOLLEDIG DYNAMISCHE AI QUERY ONTLEDING & SCORING (v1.5.4)
+# 4. QUERY ONTLEDING & DYNAMISCHE SCORING (v1.5.5)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -216,12 +216,7 @@ Geef UITSLUITEND een geldig JSON-object terug:
   "ruis_genegeerd": ["wat", "weet", "je", "over", "een", "model"]
 }}
 """
-            extracted_data = {
-                "personen": [],
-                "specifieke_termen": [],
-                "generieke_termen": [],
-                "ruis_genegeerd": []
-            }
+            extracted_data = None
 
             try:
                 res = genereer_met_retry(ai_client, MODEL_NAAM, prompt_extraction)
@@ -229,7 +224,14 @@ Geef UITSLUITEND een geldig JSON-object terug:
                 if json_match:
                     extracted_data = json.loads(json_match.group(0))
             except Exception as e:
-                st.warning(f"AI-ontleding waarschuwing: {e}")
+                st.error(f"⛔ **API-Limiet of Netwerkfout bij AI Query-ontleding:**\n\n{e}\n\n*De zoekopdracht is gestopt om te voorkomen dat er willekeurige documenten en foute analyses worden gegenereerd. Probeer het over 1 minuut opnieuw.*")
+                st.session_state.start_zoekopdracht = False
+                st.stop()
+
+            if not extracted_data:
+                st.error("⛔ **AI Query-ontleding kon geen geldige data structureren.** Zoekopdracht geannuleerd.")
+                st.session_state.start_zoekopdracht = False
+                st.stop()
 
             harde_namen = [normaliseer_tekst(p) for p in extracted_data.get("personen", []) if len(p) >= 2]
             
@@ -270,7 +272,7 @@ Geef UITSLUITEND een geldig JSON-object terug:
                 aantal_specifieke_matches = 0
                 heeft_specifieke_match = False
 
-                # 1. MATCHING OP PERSONEN (Zeer hoge prioriteit)
+                # 1. MATCHING OP PERSONEN (Hoge prioriteit)
                 for hn in harde_namen:
                     if hn in b_naam_norm:
                         score += 20000
@@ -284,7 +286,7 @@ Geef UITSLUITEND een geldig JSON-object terug:
                 # 2. MATCHING OP DYNAMISCHE SPECIFIEKE TERMEN (Unieke modellen, types, nummers)
                 for st_term in specifieke_termen:
                     if st_term in b_naam_norm:
-                        score += 25000  # Maximale bonus voor exacte specifieke match in bestandsnaam
+                        score += 25000  # Maximale bonus voor exacte match in bestandsnaam
                         heeft_specifieke_match = True
                         aantal_specifieke_matches += 1
                     elif st_term in ond or st_term in inhoud:
@@ -299,14 +301,12 @@ Geef UITSLUITEND een geldig JSON-object terug:
                     elif gt_term in ond or gt_term in inhoud:
                         score += 400
 
-                # 4. STRATIGISCHE DYNAMISCHE PENALTY
-                # Als de vraag minstens één 'specifieke term' of 'persoon' bevatte, 
-                # maar dit specifieke document heeft daar NUL matches op (en alleen op generieke begrippen),
-                # dan geven we 95% strafpunten om algemene kranten of foute modellen te onderdrukken.
+                # 4. STRATEGISCHE DYNAMISCHE PENALTY
+                # Als er specifieke zoektermen waren, maar dit bestand heeft 0 specifieke matches,
+                # krijgt het 95% strafpunten om generieke kranten en foute modellen te onderdrukken.
                 if (specifieke_termen or harde_namen) and not heeft_specifieke_match:
                     score *= 0.05
 
-                # Extra bonus als er meerdere specifieke zoektermen tegelijk matchen
                 if aantal_specifieke_matches > 1:
                     score *= (1 + (aantal_specifieke_matches * 0.5))
 
@@ -316,7 +316,12 @@ Geef UITSLUITEND een geldig JSON-object terug:
             gesorteerde_dossiers = [d_id for d_id, sc in sorted(dossier_scores.items(), key=lambda x: x[1], reverse=True)]
 
             if not gesorteerde_dossiers:
-                gesorteerde_dossiers = list(set(str(row.get('Document_ID', '')).strip() or f"SINGLE_{str(row.get('Bestandsnaam', '')).strip()}" for row in data))
+                if specifieke_termen or harde_namen or generieke_termen:
+                    st.warning("⚠️ Geen archiefstukken gevonden die overeenkomen met de opgegeven zoektermen.")
+                    st.session_state.start_zoekopdracht = False
+                    st.stop()
+                else:
+                    gesorteerde_dossiers = list(set(str(row.get('Document_ID', '')).strip() or f"SINGLE_{str(row.get('Bestandsnaam', '')).strip()}" for row in data))
 
             st.session_state.geselecteerde_doc_ids = gesorteerde_dossiers[:max_dossiers]
 

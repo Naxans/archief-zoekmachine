@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.6.4 (Deterministische & Consistente Historische Analyse)"
+APP_VERSION = "v1.6.5 (Geoptimaliseerde Ruis-Filtering & Snelheid)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -152,7 +152,8 @@ with col1:
         height=100
     )
 with col2:
-    max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=20, step=5)
+    # Aangepast: Standaard ingesteld op 15 (minimaal risico op API-limieten)
+    max_dossiers = st.slider("Max dossiers (Document_ID's):", min_value=5, max_value=50, value=15, step=5)
 
 btn_col1, btn_col2 = st.columns([2, 1])
 with btn_col1:
@@ -212,14 +213,15 @@ Jij bent een intelligente zoekarchivaris voor een Belgisch historisch archief ui
 
 GEBRUIKERSVRAAG: "{vraag_orig}"
 
-CRUCIALE REGELS:
+CRUCIALE REGELS VOOR DE CATEGORIEËN:
 1. "personen": Extraheer persoonsnamen EN genereer bekende spellingvariaties voor voornamen/achternamen (bijv. "emile" -> ["emile", "emiel"]).
 2. "specifieke_termen": Extraheer uitsluitend de MEEST SPECIFIEKE en UNIEKE identificatierestanten, modellers, typenummers EN ALLE DATUMS/JAARTALLEN (zoals "1934", "1940", "10 mei 1940"). DATUMS EN JAARTALLEN MOGEN NOOIT ONDER RUIS VALLEN!
-3. "generieke_termen": Extraheer algemene merknamen, firmanamen, vakgebieden of onderwerpen (bijv. ["radio belge de construction", "financiële toestand", "bedrijf"]).
+3. "generieke_termen": Extraheer specifieke merknamen, eigenmerknamen, zakelijke onderwerpen of unieke combinatiefrases (bijv. ["radio belge de construction", "financiële toestand"]). PURE ALGEMENE WOORDEN ZOALS "firma", "bedrijf" OF "vennootschap" HIER NIET PLAATSEN!
 4. "synoniemen_documenttypes": OMDAT BELGISCHE ARCHIEVEN UIT DIE TIJD VAAK FRANSTALIG WAREN (STAATSBLAD / MONITEUR), VOEG JE ZOWEL NEDERLANDSE ALS FRANSE SYNONIEMEN TOE.
    - Bij financiën / balansen / toestand: ["staatsblad", "moniteur", "balans", "bilan", "jaarrekening", "comptes annuels", "kapitaal", "capital", "concordaat", "concordat", "inventaris", "inventaire"]
    - Bij oprichting / statuten: ["oprichting", "statuts", "acte", "akte", "annexes", "bijlagen"]
-5. "ruis_genegeerd": UITSLUITEND grammaticale vulwoorden en vraagwoorden (zoals "wat", "weet", "je", "over", "hoe", "was", "de", "tussen", "en").
+5. "ruis_genegeerd": Grammaticale lidwoorden, voorzetsels, vraagwoorden EN algemene betekenisloze bedrijfsaanduidingen (zoals "hoe", "was", "de", "firma", "bedrijf", "van", "tussen", "en").
+   WAARSCHUWING: Elk woord mag maar in EXACT EÉN categorie voorkomen!
 
 Geef UITSLUITEND een geldig JSON-object terug:
 {{
@@ -227,7 +229,7 @@ Geef UITSLUITEND een geldig JSON-object terug:
   "specifieke_termen": ["1934", "1940"],
   "generieke_termen": ["radio belge de construction", "financiële toestand"],
   "synoniemen_documenttypes": ["staatsblad", "moniteur", "balans", "bilan", "jaarrekening", "comptes annuels", "kapitaal", "capital"],
-  "ruis_genegeerd": ["hoe", "was", "de", "van", "tussen", "en"]
+  "ruis_genegeerd": ["hoe", "was", "de", "firma", "van", "tussen", "en"]
 }}
 """
             extracted_data = None
@@ -259,14 +261,35 @@ Geef UITSLUITEND een geldig JSON-object terug:
 
             spec_termen = [normaliseer_tekst(s) for s in extracted_data.get("specifieke_termen", []) if len(s) >= 1]
             gen_termen = [normaliseer_tekst(g) for g in extracted_data.get("generieke_termen", []) if len(g) >= 2]
+            
+            # Verwijder losse algemene woorden ("firma", "bedrijf") uit generieke termen voor schone scoring
+            algemene_woorden = {'firma', 'bedrijf', 'vennootschap', 'maatschappij', 'nv', 'sa', 'bv'}
+            gen_termen = [gt for gt in gen_termen if gt not in algemene_woorden]
+
             syn_termen = [normaliseer_tekst(syn) for syn in extracted_data.get("synoniemen_documenttypes", []) if len(syn) >= 2]
-            ruis = [normaliseer_tekst(r) for r in extracted_data.get("ruis_genegeerd", [])]
+            raw_ruis = [normaliseer_tekst(r) for r in extracted_data.get("ruis_genegeerd", [])]
+
+            # ------------------------------------------------------------------
+            # GEGARANDEERDE PYTHON RUIS-OPSCHONING (GEEN OVERLAP)
+            # ------------------------------------------------------------------
+            alle_nuttige_zoektermen = set(harde_namen + spec_termen + gen_termen + syn_termen)
+            
+            schone_ruis = []
+            for r in raw_ruis:
+                # Voeg toe als ruis tenzij het onderdeel uitmaakt van een échte zoekterm
+                is_stiekem_zoekterm = False
+                for nuttig in alle_nuttige_zoektermen:
+                    if r == nuttig or (len(r) > 3 and r in nuttig.split()):
+                        is_stiekem_zoekterm = True
+                        break
+                if not is_stiekem_zoekterm and r:
+                    schone_ruis.append(r)
 
             st.session_state.harde_naam_targets = list(set(harde_namen))
             st.session_state.specifieke_termen = list(set(spec_termen))
             st.session_state.generieke_termen = list(set(gen_termen))
             st.session_state.synoniemen_doc_termen = list(set(syn_termen))
-            st.session_state.genegeerde_ruis = list(set(ruis))
+            st.session_state.genegeerde_ruis = list(set(schone_ruis))
 
         with st.spinner("Stap 2/3: Archiefstukken & PDF's matchen op inhoud..."):
             dossier_scores = {}
@@ -314,7 +337,7 @@ Geef UITSLUITEND een geldig JSON-object terug:
                             score += 8000
                         heeft_match = True
 
-                # 3. Generieke merk-/firmanamen matching
+                # 3. Generieke merknamen / Inhoudsonderwerpen matching
                 for gt_term in generieke_termen:
                     if gt_term in b_naam_norm:
                         score += 3000

@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v1.5.0 (AI Intelligent Entity Extraction)"
+APP_VERSION = "v1.5.1 (Person-First Scoring & Name Expansion)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -137,7 +137,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
         "Vraag:",
-        placeholder='Bijv: wat staat in het boek geschreven door Mathieu rutten over de elektriciteitscentrale in tongeren?',
+        placeholder='Bijv: wanneer overleed emile delvoie?',
         height=100
     )
 with col2:
@@ -173,7 +173,7 @@ if stop_button:
     st.stop()
 
 # ------------------------------------------------------------------------------
-# 4. INTELLIGENTE AI QUERY EXPANSION & SCORING (v1.5.0)
+# 4. INTELLIGENTE AI QUERY EXPANSION & SCORING (v1.5.1)
 # ------------------------------------------------------------------------------
 if st.session_state.start_zoekopdracht:
     if not st.session_state.huidige_vraag.strip():
@@ -195,22 +195,22 @@ if st.session_state.start_zoekopdracht:
             vraag_orig = st.session_state.huidige_vraag
 
             prompt_extraction = f"""
-Jij bent een intelligente zoekarchivaris. Ontleed de onderstaande zoekvraag van een gebruiker.
+Jij bent een intelligente zoekarchivaris voor een Belgisch/Nederlands archief. Ontleed de onderstaande zoekvraag van een gebruiker.
 
 GEBRUIKERSVRAAG: "{vraag_orig}"
 
 TAAK:
-1. "personen": Extraheer uitsluitend persoonsnamen (bijv. "mathieu", "rutten", "emile", "delvoie").
-2. "kernbegrippen": Extraheer uitsluitend inhoudelijke onderwerpen, locaties, apparaten of specifieke begrippen (bijv. "elektriciteitscentrale", "tongeren", "vedette").
+1. "personen": Extraheer persoonsnamen EN genereer automatisch bekende spellingvariaties voor voornamen/achternamen (bijv. "emile" -> ["emile", "emiel"], "mathieu" -> ["mathieu", "matthieu"]).
+2. "kernbegrippen": Extraheer uitsluitend inhoudelijke onderwerpen, locaties, apparaten of begrippen (bijv. "elektriciteitscentrale", "tongeren").
 3. "synoniemen_frans": Voeg relevante Franse synoniemen toe voor de kernbegrippen (bijv. "centrale électrique", "décès").
-4. "ruis_genegeerd": Identificeer alle grammaticale ruis, vraagwoorden, werkwoorden of generieke woorden die GEEN specifieke inhoud bevatten (bijv. "wat", "staat", "in", "het", "boek", "geschreven", "door", "over", "de").
+4. "ruis_genegeerd": Identificeer alle grammaticale ruis, vraagwoorden, werkwoorden of generieke woorden (bijv. "wanneer", "overleed", "wat", "staat", "in", "het", "boek", "geschreven").
 
-Geef UITSLUITEND een geldig JSON-object terug in het volgende formaat:
+Geef UITSLUITEND een geldig JSON-object terug:
 {{
-  "personen": ["mathieu", "rutten"],
-  "kernbegrippen": ["elektriciteitscentrale", "tongeren"],
-  "synoniemen_frans": ["centrale électrique"],
-  "ruis_genegeerd": ["wat", "staat", "in", "het", "boek", "geschreven", "door", "over", "de"]
+  "personen": ["emile", "emiel", "delvoie"],
+  "kernbegrippen": [],
+  "synoniemen_frans": ["décès", "mort"],
+  "ruis_genegeerd": ["wanneer", "overleed"]
 }}
 """
             extracted_data = {
@@ -228,10 +228,9 @@ Geef UITSLUITEND een geldig JSON-object terug in het volgende formaat:
             except Exception as e:
                 st.warning(f"AI-ontleding waarschuwing: {e}")
 
-            # Normaliseer alle geëxtraheerde elementen
             harde_namen = [normaliseer_tekst(p) for p in extracted_data.get("personen", []) if len(p) >= 2]
             
-            # Voeg bekende naam-varianten toe indien van toepassing (bijv. emile/emiel)
+            # Extra handmatige fallback voor Emile/Emiel
             if 'emile' in harde_namen and 'emiel' not in harde_namen:
                 harde_namen.append('emiel')
             elif 'emiel' in harde_namen and 'emile' not in harde_namen:
@@ -254,7 +253,6 @@ Geef UITSLUITEND een geldig JSON-object terug in het volgende formaat:
             for row in data:
                 b_naam = str(row.get('Bestandsnaam', '')).strip()
                 doc_id = str(row.get('Document_ID', '')).strip()
-                
                 if not doc_id:
                     doc_id = f"SINGLE_{b_naam}"
 
@@ -263,41 +261,43 @@ Geef UITSLUITEND een geldig JSON-object terug in het volgende formaat:
                 inhoud = normaliseer_tekst(row.get('Inhoud & Cijfers (NL)') or row.get('Inhoud & cijfers') or row.get('Inhoud') or '')
                 
                 b_naam_norm = normaliseer_tekst(b_naam)
-                combi_tekst = f"{doc_id.lower()} {b_naam_norm} {pers} {ond} {inhoud}"
 
                 score = 0
                 exact_filename_matches = 0
+                aantal_naam_matches = 0
                 aantal_kernwoord_matches = 0
 
-                # 1. MATCHING OP KERNBEGRIPPEN (bijv. 'elektriciteitscentrale', 'tongeren', 'vedette')
+                # 1. MATCHING OP PERSONEN (Zeer hoge prioriteit)
+                for hn in harde_namen:
+                    if hn in b_naam_norm:
+                        score += 150000
+                        exact_filename_matches += 1
+                        aantal_naam_matches += 1
+                    elif hn in pers:
+                        score += 50000
+                        aantal_naam_matches += 1
+                    elif hn in ond or hn in inhoud:
+                        score += 15000
+                        aantal_naam_matches += 1
+
+                # 2. MATCHING OP KERNBEGRIPPEN
                 for kt in hoofd_kernwoorden:
                     if kt in b_naam_norm:
-                        score += 200000
+                        score += 100000
                         exact_filename_matches += 1
                         aantal_kernwoord_matches += 1
                     elif kt in ond or kt in inhoud:
-                        score += 40000
+                        score += 20000
                         aantal_kernwoord_matches += 1
 
-                # 2. MATCHING OP PERSONEN (bijv. 'mathieu', 'rutten', 'delvoie')
-                for hn in harde_namen:
-                    if hn in b_naam_norm:
-                        score += 100000
-                        exact_filename_matches += 1
-                    elif hn in pers:
-                        score += 30000
-                    elif hn in ond or hn in inhoud:
-                        score += 10000
-
-                # 3. DYNAMISCHE MULTIPLIER & AFSTRAFFING VOOR MISMATCHES
+                # 3. DYNAMISCHE MULTIPLIER & GEBALANCEERDE AFSTRAFFING
                 multiplier = 1.0
 
                 if exact_filename_matches > 0:
                     multiplier += (exact_filename_matches * 5.0)
 
-                # Als de gebruiker specifieke kernbegrippen zoekt (bijv. elektriciteitscentrale) 
-                # én het document bevat DIT kernbegrip niet, geef dan een zware afstraffing.
-                if hoofd_kernwoorden and aantal_kernwoord_matches == 0:
+                # Pas ALLEEN een afstraffing toe als er GEEN persoonsnaam is gematcht én er wel kernwoorden ontbreken
+                if hoofd_kernwoorden and aantal_kernwoord_matches == 0 and aantal_naam_matches == 0:
                     score = score * 0.01
 
                 final_score = score * multiplier
@@ -506,10 +506,8 @@ if st.session_state.blader_paginas:
                             scale /= 1.15;
                         }
 
-                        // Grenzen aan zoomen
                         scale = Math.min(Math.max(0.8, scale), 8);
 
-                        // Behoud het middelpunt tijdens zoomen
                         const factor = scale / oldScale;
                         pointX *= factor;
                         pointY *= factor;

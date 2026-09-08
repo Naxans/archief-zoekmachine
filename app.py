@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.0.0 (Universele Intentie & Dynamische Scoring)"
+APP_VERSION = "v2.1.0 (Dossier-Gebundeld & Lightbox Viewer)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -70,7 +70,12 @@ DRIVE_MAP_NAAM = "archieven"
 SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
 def bepaal_werkend_model(client):
-    kandidaten = ['gemini-flash-latest', 'gemini-flash-lite-latest']
+    kandidaten = [
+        'gemini-2.5-flash-lite', 
+        'gemini-2.0-flash-lite', 
+        'gemini-flash-lite-latest', 
+        'gemini-flash-latest'
+    ]
     for model_naam in kandidaten:
         try:
             client.models.generate_content(model=model_naam, contents="ping")
@@ -213,31 +218,27 @@ Ontleed de onderstaande gebruikersvraag op een absoluut nauwkeurige manier.
 GEBRUIKERSVRAAG: "{vraag_orig}"
 
 TAAK 1: BEPAAL HET VRAAGTYPE ("vraag_type"):
-- "PERSOON_GEBEURTENIS": Vragen over overlijden, geboorte, biografische feiten van specifieke personen (bijv. Emile Delvoie).
-- "OBJECT_SPECIFIEK": Vragen over een specifiek radiomodel, merk, boek, auteur of specifieke locatie (bijv. Vedette, Royal Record, Mathieu Rutten, Tongeren).
-- "PERIODE_FINANCIEEL": Vragen over financiële toestand, balansen, kapitaal, oorlogs- of schadeclaims over jaren/periodes (bijv. 1934-1940, oorlogsschade).
+- "PERSOON_GEBEURTENIS": Vragen over overlijden, geboorte, biografische feiten van specifieke personen.
+- "OBJECT_SPECIFIEK": Vragen over een specifiek radiomodel, merk, boek, auteur of specifieke locatie.
+- "PERIODE_FINANCIEEL": Vragen over financiële toestand, balansen, kapitaal, oorlogs- of schadeclaims over jaren/periodes.
 - "BRON_COLLECTIE": Vragen over tijdschriften, periodieken, reeksen, tijdschriftencollecties (bijv. Radiocentrale Leuven).
-- "ALGEMEEN_PERSOON_ORGANISATIE": Vragen over bestuursleden, oprichting, organisatie van een firma in een specifiek jaar.
+- "ALGEMEEN_PERSOON_ORGANISATIE": Vragen over bestuursleden, oprichting, organisatie van een firma.
 
 TAAK 2: CATEGORISEER DE TERMEN:
-1. "personen": Echte persoonsnamen + bekende spellingvariaties (bijv. "mathieu rutten", "emile delvoie", "emiel delvoie").
-2. "specifieke_termen": Plaatsnamen, merknamen, typenummers, boektitels, tijdschriftnamen, specifieke onderwerpen EN DATUMS/JAARTALLEN (bijv. "tongeren", "vedette", "royal record", "radiocentrale", "leuven", "oorlogsschade", "1936", "1934", "1940"). DATUMS MOGEN NOOIT RUIS ZIJN!
-3. "generieke_termen": Algemene onderwerpen of bedrijfsorganisaties (bijv. "radio belge de construction", "bestuursleden", "elektriciteitscentrale"). Sluit puur betekenisloze woorden zoals "firma" of "bedrijf" uit!
-4. "synoniemen_documenttypes": Meertalige (NL/FR) archieftermen voor betere matching:
-   - Bij overlijden: ["overlijden", "décès", "dood", "overleden", "in memoriam", "akte"]
-   - Bij financiën/schade: ["balans", "bilan", "schade", "dommages", "oorlogsschade", "sinistre", "staatsblad", "moniteur", "rekening"]
-   - Bij bestuur/organisatie: ["bestuur", "conseil", "statuten", "statuts", "benoeming", "nomination", "moniteur"]
-   - Bij tijdschriften/publicaties: ["tijdschrift", "revue", "periodiek", "bulletin", "nummer", "nr"]
-5. "ruis_genegeerd": UITSLUITEND echte grammaticale stopwoorden, vraagwoorden en lidwoorden (bijv. "hoe", "was", "de", "van", "wat", "staat", "in", "het", "geschreven", "door", "over", "wanneer", "wie", "waren", "geef", "me", "een", "lijst").
+1. "personen": Echte persoonsnamen.
+2. "specifieke_termen": Plaatsnamen, merknamen, typenummers, boektitels, tijdschriftnamen, specifieke onderwerpen EN DATUMS/JAARTALLEN.
+3. "generieke_termen": Algemene onderwerpen of bedrijfsorganisaties (sluit 'firma' of 'bedrijf' uit).
+4. "synoniemen_documenttypes": Meertalige (NL/FR) archieftermen voor betere matching.
+5. "ruis_genegeerd": UITSLUITEND echte grammaticale stopwoorden, vraagwoorden en lidwoorden.
 
 Geef UITSLUITEND een geldig JSON-object terug:
 {{
   "vraag_type": "OBJECT_SPECIFIEK",
   "personen": ["mathieu rutten"],
-  "specifieke_termen": ["tongeren", "elektriciteitscentrale"],
+  "specifieke_termen": ["tongeren"],
   "generieke_termen": ["boek"],
-  "synoniemen_documenttypes": ["publicatie", "historiek"],
-  "ruis_genegeerd": ["wat", "staat", "in", "het", "geschreven", "door", "over"]
+  "synoniemen_documenttypes": ["publicatie"],
+  "ruis_genegeerd": ["wat", "staat", "in"]
 }}
 """
             extracted_data = None
@@ -261,7 +262,6 @@ Geef UITSLUITEND een geldig JSON-object terug:
             st.session_state.vraag_type = extracted_data.get("vraag_type", "ALGEMEEN")
             harde_namen = [normaliseer_tekst(p) for p in extracted_data.get("personen", []) if len(p) >= 2]
             
-            # Automatische variant-afhandeling voor Franse/Nederlandse voornamen
             if 'emile' in harde_namen and 'emiel' not in harde_namen:
                 harde_namen.append('emiel')
             elif 'emiel' in harde_namen and 'emile' not in harde_namen:
@@ -276,17 +276,8 @@ Geef UITSLUITEND een geldig JSON-object terug:
             syn_termen = [normaliseer_tekst(syn) for syn in extracted_data.get("synoniemen_documenttypes", []) if len(syn) >= 2]
             raw_ruis = [normaliseer_tekst(r) for r in extracted_data.get("ruis_genegeerd", [])]
 
-            # HARDE VEILIGHEIDSCHECK TEGEN OVERDELEN VAN RELEVANTE TERMEN NAAR RUIS
             alle_nuttige_zoektermen = set(harde_namen + spec_termen + gen_termen + syn_termen)
-            schone_ruis = []
-            for r in raw_ruis:
-                is_relevante_term = False
-                for nuttig in alle_nuttige_zoektermen:
-                    if r == nuttig or (len(r) > 3 and r in nuttig.split()):
-                        is_relevante_term = True
-                        break
-                if not is_relevante_term and r:
-                    schone_ruis.append(r)
+            schone_ruis = [r for r in raw_ruis if r and not any(r == nuttig or (len(r) > 3 and r in nuttig.split()) for nuttig in alle_nuttige_zoektermen)]
 
             st.session_state.harde_naam_targets = list(set(harde_namen))
             st.session_state.specifieke_termen = list(set(spec_termen))
@@ -294,7 +285,7 @@ Geef UITSLUITEND een geldig JSON-object terug:
             st.session_state.synoniemen_doc_termen = list(set(syn_termen))
             st.session_state.genegeerde_ruis = list(set(schone_ruis))
 
-        with st.spinner("Stap 2/3: Archiefstukken matchen met dynamische gewichten..."):
+        with st.spinner("Stap 2/3: Archiefstukken matchen (Groepeerd per Document_ID)..."):
             dossier_scores = {}
 
             specifieke_termen = st.session_state.specifieke_termen
@@ -303,63 +294,78 @@ Geef UITSLUITEND een geldig JSON-object terug:
             harde_namen = st.session_state.harde_naam_targets
             vraag_type = st.session_state.vraag_type
 
+            # FASE 1: Groepeer eerst alle teksten per uniek Document_ID
+            dossiers_geaggregeerd = {}
             for row in data:
                 b_naam = str(row.get('Bestandsnaam', '')).strip()
                 doc_id = str(row.get('Document_ID', '')).strip()
                 if not doc_id:
                     doc_id = f"SINGLE_{b_naam}"
 
-                pers = normaliseer_tekst(row.get('Genoemde Personen') or row.get('Genoemde personen') or '')
-                ond = normaliseer_tekst(row.get('Onderwerp (NL)') or row.get('Onderwerp') or '')
-                inhoud = normaliseer_tekst(row.get('Inhoud & Cijfers (NL)') or row.get('Inhoud & cijfers') or row.get('Inhoud') or '')
-                b_naam_norm = normaliseer_tekst(b_naam)
+                if doc_id not in dossiers_geaggregeerd:
+                    dossiers_geaggregeerd[doc_id] = {
+                        "bestandsnamen": [],
+                        "personen": [],
+                        "onderwerpen": [],
+                        "inhouden": []
+                    }
+
+                dossiers_geaggregeerd[doc_id]["bestandsnamen"].append(normaliseer_tekst(b_naam))
+                dossiers_geaggregeerd[doc_id]["personen"].append(normaliseer_tekst(row.get('Genoemde Personen') or row.get('Genoemde personen') or ''))
+                dossiers_geaggregeerd[doc_id]["onderwerpen"].append(normaliseer_tekst(row.get('Onderwerp (NL)') or row.get('Onderwerp') or ''))
+                dossiers_geaggregeerd[doc_id]["inhouden"].append(normaliseer_tekst(row.get('Inhoud & Cijfers (NL)') or row.get('Inhoud & cijfers') or row.get('Inhoud') or ''))
+
+            # FASE 2: Bereken de score op het complete, samengevoegde dossier
+            for doc_id, inhoud_data in dossiers_geaggregeerd.items():
+                alle_b_namen = " ".join(inhoud_data["bestandsnamen"])
+                alle_pers = " ".join(inhoud_data["personen"])
+                alle_ond = " ".join(inhoud_data["onderwerpen"])
+                alle_inhoud = " ".join(inhoud_data["inhouden"])
 
                 score = 0
 
-                # 1. MATCHING OP PERSONEN (Bijv. Emile Delvoie, Mathieu Rutten)
+                # 1. MATCHING OP PERSONEN
                 for hn in harde_namen:
-                    if hn in pers:
+                    if hn in alle_pers:
                         score += 35000 if vraag_type == "PERSOON_GEBEURTENIS" else 15000
-                    if hn in b_naam_norm:
+                    if hn in alle_b_namen:
                         score += 25000
-                    if hn in ond or hn in inhoud:
+                    if hn in alle_ond or hn in alle_inhoud:
                         score += 8000
 
-                # 2. MATCHING OP SPECIFIEKE TERMEN & DATUMS (Bijv. Vedette, Tongeren, 1936)
+                # 2. MATCHING OP SPECIFIEKE TERMEN & DATUMS
                 for st_term in specifieke_termen:
-                    if st_term in b_naam_norm:
+                    if st_term in alle_b_namen:
                         score += 30000
-                    if st_term in ond:
+                    if st_term in alle_ond:
                         score += 15000
-                    if st_term in inhoud:
+                    if st_term in alle_inhoud:
                         if st_term.isdigit() and len(st_term) == 4:
-                            # Jaartal extra gewicht bij periode/bestuur vragen
                             score += 18000 if vraag_type in ["PERIODE_FINANCIEEL", "ALGEMEEN_PERSOON_ORGANISATIE"] else 8000
                         else:
                             score += 12000
 
                 # 3. MATCHING OP SYNONIEMEN EN DOCUMENT TYPES (NL/FR)
                 for syn_term in synoniemen_termen:
-                    if syn_term in b_naam_norm:
+                    if syn_term in alle_b_namen:
                         score += 20000
-                    if syn_term in ond or syn_term in inhoud:
+                    if syn_term in alle_ond or syn_term in alle_inhoud:
                         score += 10000
 
                 # 4. MATCHING OP GENERIEKE CONTEXT
                 for gt_term in generieke_termen:
-                    if gt_term in b_naam_norm:
+                    if gt_term in alle_b_namen:
                         score += 4000
-                    if gt_term in ond or gt_term in inhoud:
+                    if gt_term in alle_ond or gt_term in alle_inhoud:
                         score += 2000
 
                 if score > 0:
-                    dossier_scores[doc_id] = dossier_scores.get(doc_id, 0) + score
+                    dossier_scores[doc_id] = score
 
             gesorteerde_dossiers = [d_id for d_id, sc in sorted(dossier_scores.items(), key=lambda x: x[1], reverse=True)]
 
-            # Fallback als er geen strikte match is
             if not gesorteerde_dossiers:
-                gesorteerde_dossiers = list(set(str(row.get('Document_ID', '')).strip() or f"SINGLE_{str(row.get('Bestandsnaam', '')).strip()}" for row in data))
+                gesorteerde_dossiers = list(dossiers_geaggregeerd.keys())
 
             st.session_state.geselecteerde_doc_ids = gesorteerde_dossiers[:max_dossiers]
 
@@ -460,7 +466,7 @@ if st.session_state.blader_paginas:
             tegel_items.append(eerste_pagina)
 
     st.subheader(f"🖼️ Geselecteerde Archiefdocumenten ({len(tegel_items)} dossiers • {len(st.session_state.blader_paginas)} bestanden)")
-    st.caption("Klik op een tegel om het document te bekijken.")
+    st.caption("Klik op een tegel om het complete dossier te openen en erdoorheen te bladeren.")
 
     html_template = Template("""
     <!DOCTYPE html>

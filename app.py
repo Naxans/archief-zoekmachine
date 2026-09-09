@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.2.1 (Dossier-Gebundeld & Fixed Chat-Vervolg)"
+APP_VERSION = "v2.2.2 (Dossier-Gebundeld & Tips toegevoegd)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -165,6 +165,20 @@ with btn_col1:
     submit_button = st.button("🔍 Voer onderzoek uit", type="primary", use_container_width=True)
 with btn_col2:
     stop_button = st.button("⛔ Stop / Annuleer", type="secondary", use_container_width=True)
+
+# ------------------------------------------------------------------------------
+# INFORMATIE BARK / TIPS VOOR DE GEBRUIKER
+# ------------------------------------------------------------------------------
+with st.expander("💡 Handige tips voor het testen"):
+    st.markdown("""
+    * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken (zoals *"Geef alle informatie over RBC"*). Bij een te brede vraag worden er erg veel documenten gevonden, waardoor Gemini veel tijd nodig heeft om alles te analyseren. Vragen naar specifieke namen, jaartallen of onderwerpen werken het snelst en het beste.
+    * **Knop '🔍 Voer onderzoek uit':** Hiermee start je de zoekopdracht. De AI gaat dan direct de relevante documenten en afbeeldingen analyseren.
+    * **Knop '⛔ Stop / Annuleer':** Mocht een zoekopdracht te lang duren of wil je halverwege stoppen, dan kun je hiermee het proces meteen afbreken.
+    * **Schuifregelaar 'Max dossiers (Document_ID's)':** Hiermee bepaal je hoeveel verschillende archiefmappen/documenten de AI maximaal mag bekijken.
+        * **Laag zetten (bijv. 5 tot 10):** Ideaal voor snelle vragen. De AI is sneller klaar en gebruikt minder capaciteit.
+        * **Hoog zetten (bijv. 30 tot 50):** Handig voor ingewikkelde vragen waarbij de informatie verspreid kan liggen over meerdere documenten. Het analyseren duurt dan wel wat langer.
+    * **💬 Vervolgvragen stellen:** Onder het gegenereerde rapport kun je direct een vervolgvraag typen. De AI onthoudt de eerdere antwoorden en zoekt zonodig weer verder in het archief.
+    """)
 
 if submit_button:
     st.session_state.blader_paginas = []

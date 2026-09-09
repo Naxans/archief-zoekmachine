@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.1.0 (Dossier-Gebundeld & Lightbox Viewer)"
+APP_VERSION = "v2.2.0 (Dossier-Gebundeld & Vraag-op-Vraag Chat)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -151,7 +151,7 @@ if MODEL_NAAM:
 col1, col2 = st.columns([3, 1])
 with col1:
     onderzoeksvraag = st.text_area(
-        "Vraag:",
+        "Start een nieuw onderzoek:",
         placeholder='Bijv: hoe was de financiële toestand van de firma radio belge de construction tussen 1934 en 1940?',
         height=100
     )
@@ -285,7 +285,7 @@ Geef UITSLUITEND een geldig JSON-object terug:
             st.session_state.synoniemen_doc_termen = list(set(syn_termen))
             st.session_state.genegeerde_ruis = list(set(schone_ruis))
 
-        with st.spinner("Stap 2/3: Archiefstukken matchen (Groepeerd per Document_ID)..."):
+        with st.spinner("Stap 2/3: Archiefstukken matchen (Gebundeld per Document_ID)..."):
             dossier_scores = {}
 
             specifieke_termen = st.session_state.specifieke_termen
@@ -425,13 +425,13 @@ Geef UITSLUITEND een geldig JSON-object terug:
             st.rerun()
 
 # ------------------------------------------------------------------------------
-# 5. WEERGAVE VAN DE TEGELS (CENTERED ZOOM & PAN VIEWER)
+# 5. WEERGAVE VAN DE TEGELS (LIGHTBOX GALLERY VIEWER)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas:
     st.divider()
     
     with st.expander("💡 Bekijk de slimme AI Query-analyse & Genegeerde Ruis"):
-        st.markdown(f"**Originele vraag:** `{st.session_state.huidige_vraag}`")
+        st.markdown(f"**Laatste zoekopdracht:** `{st.session_state.huidige_vraag}`")
         st.markdown(f"**Gedetecteerd Vraagtype:** `{st.session_state.vraag_type}`")
         if st.session_state.harde_naam_targets:
             st.markdown(f"**Geëxtraheerde personen:** `{', '.join(st.session_state.harde_naam_targets)}`")
@@ -666,7 +666,7 @@ if st.session_state.blader_paginas:
     components.html(grid_html, height=(aantal_rijen * 240) + 15, scrolling=False)
 
 # ------------------------------------------------------------------------------
-# 6. MULTIMODAL HISTORISCHE ANALYSE VIA GEMINI (DETERMINISTISCH MET TEMP = 0.0)
+# 6. MULTIMODAL HISTORISCHE ANALYSE VIA GEMINI (EERSTE ANTWOORD GENEREREN)
 # ------------------------------------------------------------------------------
 if st.session_state.blader_paginas and not st.session_state.chat_historie:
     with st.spinner("Stap 3/3: Originele PDF's/Afbeeldingen ophalen & Historische analyse genereren..."):
@@ -727,6 +727,7 @@ STRUCTUUREISEN VOOR HET RAPPORT:
                 temperature=0.0
             )
 
+            st.session_state.chat_historie.append(("user", st.session_state.huidige_vraag))
             analyse_response = genereer_met_retry(ai_client, MODEL_NAAM, payload, config=analysis_config)
             st.session_state.chat_historie.append(("assistant", analyse_response.text))
             gc.collect()
@@ -734,9 +735,21 @@ STRUCTUUREISEN VOOR HET RAPPORT:
         except Exception as e:
             st.error(f"Fout bij historische analyse: {e}")
 
+# ------------------------------------------------------------------------------
+# 7. RAPPORT WEERGAVE & INTERACTIEVE CHAT (OPTIE A: OPNIEUW ZOEKEN VIA VERVOLGVRAAG)
+# ------------------------------------------------------------------------------
 if st.session_state.chat_historie:
     st.divider()
-    st.subheader("📑 Historisch Onderzoeksrapport")
+    st.subheader("📑 Historisch Onderzoeksrapport & Dialoog")
+    
     for rol, tekst in st.session_state.chat_historie:
         with st.chat_message(rol):
             st.write(tekst)
+
+    # VRAAG-OP-VRAAG CHATBOX ONDERAAN HET RAPPORT
+    vervolgvraag = st.chat_input("Stel een vervolgvraag (het archief wordt opnieuw doorzocht met behoud van de historie)...")
+    
+    if vervolgvraag:
+        st.session_state.huidige_vraag = vervolgvraag
+        st.session_state.start_zoekopdracht = True
+        st.rerun()

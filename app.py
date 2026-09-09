@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.2.2 (Dossier-Gebundeld & Tips toegevoegd)"
+APP_VERSION = "v2.2.4 (Spellingcorrectie & Meertalige Naams-Analyse)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -167,7 +167,7 @@ with btn_col2:
     stop_button = st.button("⛔ Stop / Annuleer", type="secondary", use_container_width=True)
 
 # ------------------------------------------------------------------------------
-# INFORMATIE BARK / TIPS VOOR DE GEBRUIKER
+# INFORMATIE BALK / TIPS VOOR DE GEBRUIKER
 # ------------------------------------------------------------------------------
 with st.expander("💡 Handige tips voor het testen"):
     st.markdown("""
@@ -243,7 +243,7 @@ TAAK 1: BEPAAL HET VRAAGTYPE ("vraag_type"):
 - "ALGEMEEN_PERSOON_ORGANISATIE": Vragen over bestuursleden, oprichting, organisatie van een firma.
 
 TAAK 2: CATEGORISEER DE TERMEN:
-1. "personen": Echte persoonsnamen.
+1. "personen": Echte persoonsnamen. VOEG AUTOMATISCH ZOWEL DE NEDERLANDSE ALS DE FRANSE SPELVARIANTE TOE VAN VOORNAAM EN ACHTERNAAM (bijv. "emiel delvoie" -> ["emiel delvoie", "emile delvoie"], "jean" -> ["jean", "jan"], "jules" -> ["jules", "julius"]).
 2. "specifieke_termen": Plaatsnamen, merknamen, typenummers, boektitels, tijdschriftnamen, specifieke onderwerpen EN DATUMS/JAARTALLEN.
 3. "generieke_termen": Algemene onderwerpen of bedrijfsorganisaties (sluit 'firma' of 'bedrijf' uit).
 4. "synoniemen_documenttypes": Meertalige (NL/FR) archieftermen voor betere matching.
@@ -252,7 +252,7 @@ TAAK 2: CATEGORISEER DE TERMEN:
 Geef UITSLUITEND een geldig JSON-object terug:
 {{
   "vraag_type": "OBJECT_SPECIFIEK",
-  "personen": ["mathieu rutten"],
+  "personen": ["emiel delvoie", "emile delvoie"],
   "specifieke_termen": ["tongeren"],
   "generieke_termen": ["boek"],
   "synoniemen_documenttypes": ["publicatie"],
@@ -279,11 +279,6 @@ Geef UITSLUITEND een geldig JSON-object terug:
 
             st.session_state.vraag_type = extracted_data.get("vraag_type", "ALGEMEEN")
             harde_namen = [normaliseer_tekst(p) for p in extracted_data.get("personen", []) if len(p) >= 2]
-            
-            if 'emile' in harde_namen and 'emiel' not in harde_namen:
-                harde_namen.append('emiel')
-            elif 'emiel' in harde_namen and 'emile' not in harde_namen:
-                harde_namen.append('emile')
 
             spec_termen = [normaliseer_tekst(s) for s in extracted_data.get("specifieke_termen", []) if len(s) >= 1]
             gen_termen = [normaliseer_tekst(g) for g in extracted_data.get("generieke_termen", []) if len(g) >= 2]
@@ -448,7 +443,7 @@ if st.session_state.blader_paginas:
         st.markdown(f"**Laatste zoekopdracht:** `{st.session_state.huidige_vraag}`")
         st.markdown(f"**Gedetecteerd Vraagtype:** `{st.session_state.vraag_type}`")
         if st.session_state.harde_naam_targets:
-            st.markdown(f"**Geëxtraheerde personen:** `{', '.join(st.session_state.harde_naam_targets)}`")
+            st.markdown(f"**Geëxtraheerde personen (incl. NL/FR spelvarianten):** `{', '.join(st.session_state.harde_naam_targets)}`")
         if st.session_state.specifieke_termen:
             st.markdown(f"**Unieke / Specifieke kernbegrippen & Datums:** `{', '.join(st.session_state.specifieke_termen)}`")
         if st.session_state.generieke_termen:

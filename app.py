@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.2.6 (Initialen & Afkortingen Matching)"
+APP_VERSION = "v2.2.7 (Directe Scherm-Schoonmaak bij Nieuwe Zoekopdracht)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -171,7 +171,7 @@ with btn_col2:
 # ------------------------------------------------------------------------------
 with st.expander("💡 Handige tips voor het testen"):
     st.markdown("""
-    * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken (zoals *"Geef alle informatie over RBC"*). Bei een te brede vraag worden er erg veel documenten gevonden, waardoor Gemini veel tijd nodig heeft om alles te analyseren. Vragen naar specifieke namen, jaartallen of onderwerpen werken het snelst en het beste.
+    * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken (zoals *"Geef alle informatie over RBC"*). Bij een te brede vraag worden er erg veel documenten gevonden, waardoor Gemini veel tijd nodig heeft om alles te analyseren. Vragen naar specifieke namen, jaartallen of onderwerpen werken het snelst en het beste.
     * **Knop '🔍 Voer onderzoek uit':** Hiermee start je de zoekopdracht. De AI gaat dan direct de relevante documenten en afbeeldingen analyseren.
     * **Knop '⛔ Stop / Annuleer':** Mocht een zoekopdracht te lang duren of wil je halverwege stoppen, dan kun je hiermee het proces meteen afbreken.
     * **Schuifregelaar 'Max dossiers (Document_ID's)':** Hiermee bepaal je hoeveel verschillende archiefmappen/documenten de AI maximaal mag bekijken.
@@ -180,10 +180,12 @@ with st.expander("💡 Handige tips voor het testen"):
     * **💬 Vervolgvragen stellen:** Onder het gegenereerde rapport kun je direct een vervolgvraag typen. De AI onthoudt de eerdere antwoorden en zoekt zonodig weer verder in het archief.
     """)
 
+# DIRECTE SCHOONMAAK BIJ KLIK OP NIEUW ONDERZOEK
 if submit_button:
     st.session_state.blader_paginas = []
     st.session_state.chat_historie = []
     st.session_state.actieve_chat = None
+    st.session_state.sheet_dossier_data = []
     st.session_state.verwerk_vervolgvraag = False
     st.session_state.geselecteerde_doc_ids = []
     st.session_state.specifieke_termen = []
@@ -192,10 +194,9 @@ if submit_button:
     st.session_state.synoniemen_doc_termen = []
     st.session_state.genegeerde_ruis = []
     st.session_state.huidige_vraag = onderzoeksvraag
-    gc.collect()
-
     st.session_state.gestopt = False
     st.session_state.start_zoekopdracht = True
+    gc.collect()
     st.rerun()
 
 if stop_button:
@@ -203,6 +204,8 @@ if stop_button:
     st.session_state.start_zoekopdracht = False
     st.session_state.verwerk_vervolgvraag = False
     st.session_state.blader_paginas = []
+    st.session_state.chat_historie = []
+    st.session_state.actieve_chat = None
     gc.collect()
     st.warning("⚠️ Onderzoek geannuleerd.")
     st.stop()

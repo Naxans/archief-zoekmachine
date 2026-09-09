@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.2.5 (Exacte Invoer & IJ/Y Variant-Matching)"
+APP_VERSION = "v2.2.6 (Initialen & Afkortingen Matching)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -171,7 +171,7 @@ with btn_col2:
 # ------------------------------------------------------------------------------
 with st.expander("💡 Handige tips voor het testen"):
     st.markdown("""
-    * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken (zoals *"Geef alle informatie over RBC"*). Bij een te brede vraag worden er erg veel documenten gevonden, waardoor Gemini veel tijd nodig heeft om alles te analyseren. Vragen naar specifieke namen, jaartallen of onderwerpen werken het snelst en het beste.
+    * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken (zoals *"Geef alle informatie over RBC"*). Bei een te brede vraag worden er erg veel documenten gevonden, waardoor Gemini veel tijd nodig heeft om alles te analyseren. Vragen naar specifieke namen, jaartallen of onderwerpen werken het snelst en het beste.
     * **Knop '🔍 Voer onderzoek uit':** Hiermee start je de zoekopdracht. De AI gaat dan direct de relevante documenten en afbeeldingen analyseren.
     * **Knop '⛔ Stop / Annuleer':** Mocht een zoekopdracht te lang duren of wil je halverwege stoppen, dan kun je hiermee het proces meteen afbreken.
     * **Schuifregelaar 'Max dossiers (Document_ID's)':** Hiermee bepaal je hoeveel verschillende archiefmappen/documenten de AI maximaal mag bekijken.
@@ -243,16 +243,19 @@ TAAK 1: BEPAAL HET VRAAGTYPE ("vraag_type"):
 - "ALGEMEEN_PERSOON_ORGANISATIE": Vragen over bestuursleden, oprichting, organisatie van een firma.
 
 TAAK 2: CATEGORISEER DE TERMEN:
-1. "personen": Echte persoonsnamen. BEWAAR ALTIJD EERST DE EXACTE LETTERLIJKE INVOER (zoals ingetyped, bijv. "gabrielle denijs"), EN VOEG DAARNAAST AUTOMATISCH ZOWEL DE NEDERLANDSE ALS DE FRANSE SPELVARIANTE TOE VAN VOORNAAM EN ACHTERNAAM (bijv. "ij" <-> "y", "emiel" -> ["emiel", "emile"], "denijs" -> ["gabrielle denijs", "gabrielle denys", "gabriella denijs", "gabriella denys"]).
+1. "personen": Echte persoonsnamen. 
+   - BEWAAR ALTIJD DE EXACTE LETTERLIJKE INVOER (zoals ingetyped, bijv. "gabrielle denijs").
+   - VOEG AUTOMATISCH ZOWEL DE NEDERLANDSE ALS DE FRANSE SPELVARIANTE TOE VAN VOORNAAM EN ACHTERNAAM (bijv. "ij" <-> "y", "emiel" -> "emile").
+   - VOEG AUTOMATISCH DE GEÏNITIEERDE AFKORTING TOE VAN DE VOORNAAM (bijv. "emiel delvoie" -> ["emiel delvoie", "emile delvoie", "e. delvoie", "e.delvoie"], "gabrielle denijs" -> ["gabrielle denijs", "gabrielle denys", "g. denijs", "g. denys"]).
 2. "specifieke_termen": Plaatsnamen, merknamen, typenummers, boektitels, tijdschriftnamen, specifieke onderwerpen EN DATUMS/JAARTALLEN.
-3. "generieke_termen": Algemene onderwerpen of bedrijfsorganisaties (sluit 'firma' or 'bedrijf' uit).
+3. "generieke_termen": Algemene onderwerpen of bedrijfsorganisaties (sluit 'firma' of 'bedrijf' uit).
 4. "synoniemen_documenttypes": Meertalige (NL/FR) archieftermen voor betere matching.
 5. "ruis_genegeerd": UITSLUITEND echte grammaticale stopwoorden, vraagwoorden en lidwoorden.
 
 Geef UITSLUITEND een geldig JSON-object terug:
 {{
   "vraag_type": "PERSOON_GEBEURTENIS",
-  "personen": ["gabrielle denijs", "gabrielle denys", "gabriella denijs", "gabriella denys"],
+  "personen": ["emiel delvoie", "emile delvoie", "e. delvoie"],
   "specifieke_termen": [],
   "generieke_termen": [],
   "synoniemen_documenttypes": ["overlydensbericht", "biografie"],
@@ -279,7 +282,6 @@ Geef UITSLUITEND een geldig JSON-object terug:
 
             st.session_state.vraag_type = extracted_data.get("vraag_type", "ALGEMEEN")
             
-            # Zowel de letterlijke als de genormaliseerde varianten opnemen in de zoeklijst
             ruwe_namen = extracted_data.get("personen", [])
             harde_namen = []
             for p in ruwe_namen:
@@ -451,7 +453,7 @@ if st.session_state.blader_paginas:
         st.markdown(f"**Laatste zoekopdracht:** `{st.session_state.huidige_vraag}`")
         st.markdown(f"**Gedetecteerd Vraagtype:** `{st.session_state.vraag_type}`")
         if st.session_state.harde_naam_targets:
-            st.markdown(f"**Geëxtraheerde personen (incl. NL/FR spelvarianten):** `{', '.join(st.session_state.harde_naam_targets)}`")
+            st.markdown(f"**Geëxtraheerde personen (incl. NL/FR spelvarianten & initialen):** `{', '.join(st.session_state.harde_naam_targets)}`")
         if st.session_state.specifieke_termen:
             st.markdown(f"**Unieke / Specifieke kernbegrippen & Datums:** `{', '.join(st.session_state.specifieke_termen)}`")
         if st.session_state.generieke_termen:

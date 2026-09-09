@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.2.4 (Spellingcorrectie & Meertalige Naams-Analyse)"
+APP_VERSION = "v2.2.5 (Exacte Invoer & IJ/Y Variant-Matching)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -243,20 +243,20 @@ TAAK 1: BEPAAL HET VRAAGTYPE ("vraag_type"):
 - "ALGEMEEN_PERSOON_ORGANISATIE": Vragen over bestuursleden, oprichting, organisatie van een firma.
 
 TAAK 2: CATEGORISEER DE TERMEN:
-1. "personen": Echte persoonsnamen. VOEG AUTOMATISCH ZOWEL DE NEDERLANDSE ALS DE FRANSE SPELVARIANTE TOE VAN VOORNAAM EN ACHTERNAAM (bijv. "emiel delvoie" -> ["emiel delvoie", "emile delvoie"], "jean" -> ["jean", "jan"], "jules" -> ["jules", "julius"]).
+1. "personen": Echte persoonsnamen. BEWAAR ALTIJD EERST DE EXACTE LETTERLIJKE INVOER (zoals ingetyped, bijv. "gabrielle denijs"), EN VOEG DAARNAAST AUTOMATISCH ZOWEL DE NEDERLANDSE ALS DE FRANSE SPELVARIANTE TOE VAN VOORNAAM EN ACHTERNAAM (bijv. "ij" <-> "y", "emiel" -> ["emiel", "emile"], "denijs" -> ["gabrielle denijs", "gabrielle denys", "gabriella denijs", "gabriella denys"]).
 2. "specifieke_termen": Plaatsnamen, merknamen, typenummers, boektitels, tijdschriftnamen, specifieke onderwerpen EN DATUMS/JAARTALLEN.
-3. "generieke_termen": Algemene onderwerpen of bedrijfsorganisaties (sluit 'firma' of 'bedrijf' uit).
+3. "generieke_termen": Algemene onderwerpen of bedrijfsorganisaties (sluit 'firma' or 'bedrijf' uit).
 4. "synoniemen_documenttypes": Meertalige (NL/FR) archieftermen voor betere matching.
 5. "ruis_genegeerd": UITSLUITEND echte grammaticale stopwoorden, vraagwoorden en lidwoorden.
 
 Geef UITSLUITEND een geldig JSON-object terug:
 {{
-  "vraag_type": "OBJECT_SPECIFIEK",
-  "personen": ["emiel delvoie", "emile delvoie"],
-  "specifieke_termen": ["tongeren"],
-  "generieke_termen": ["boek"],
-  "synoniemen_documenttypes": ["publicatie"],
-  "ruis_genegeerd": ["wat", "staat", "in"]
+  "vraag_type": "PERSOON_GEBEURTENIS",
+  "personen": ["gabrielle denijs", "gabrielle denys", "gabriella denijs", "gabriella denys"],
+  "specifieke_termen": [],
+  "generieke_termen": [],
+  "synoniemen_documenttypes": ["overlydensbericht", "biografie"],
+  "ruis_genegeerd": ["wie", "was"]
 }}
 """
             extracted_data = None
@@ -278,7 +278,15 @@ Geef UITSLUITEND een geldig JSON-object terug:
                 st.stop()
 
             st.session_state.vraag_type = extracted_data.get("vraag_type", "ALGEMEEN")
-            harde_namen = [normaliseer_tekst(p) for p in extracted_data.get("personen", []) if len(p) >= 2]
+            
+            # Zowel de letterlijke als de genormaliseerde varianten opnemen in de zoeklijst
+            ruwe_namen = extracted_data.get("personen", [])
+            harde_namen = []
+            for p in ruwe_namen:
+                p_str = str(p).strip().lower()
+                if len(p_str) >= 2:
+                    harde_namen.append(p_str)
+                    harde_namen.append(normaliseer_tekst(p_str))
 
             spec_termen = [normaliseer_tekst(s) for s in extracted_data.get("specifieke_termen", []) if len(s) >= 1]
             gen_termen = [normaliseer_tekst(g) for g in extracted_data.get("generieke_termen", []) if len(g) >= 2]

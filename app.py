@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.2.7 (Directe Scherm-Schoonmaak bij Nieuwe Zoekopdracht)"
+APP_VERSION = "v2.2.8 (Directe Scherm-Schoonmaak & Uitgebreide Foutcodes)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -169,7 +169,7 @@ with btn_col2:
 # ------------------------------------------------------------------------------
 # INFORMATIE BALK / TIPS VOOR DE GEBRUIKER
 # ------------------------------------------------------------------------------
-with st.expander("💡 Handige tips voor het testen"):
+with st.expander("💡 Handige tips voor het testen & Foutcodes"):
     st.markdown("""
     * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken (zoals *"Geef alle informatie over RBC"*). Bij een te brede vraag worden er erg veel documenten gevonden, waardoor Gemini veel tijd nodig heeft om alles te analyseren. Vragen naar specifieke namen, jaartallen of onderwerpen werken het snelst en het beste.
     * **Knop '🔍 Voer onderzoek uit':** Hiermee start je de zoekopdracht. De AI gaat dan direct de relevante documenten en afbeeldingen analyseren.
@@ -178,6 +178,30 @@ with st.expander("💡 Handige tips voor het testen"):
         * **Laag zetten (bijv. 5 tot 10):** Ideaal voor snelle vragen. De AI is sneller klaar en gebruikt minder capaciteit.
         * **Hoog zetten (bijv. 30 tot 50):** Handig voor ingewikkelde vragen waarbij de informatie verspreid kan liggen over meerdere documenten. Het analyseren duurt dan wel wat langer.
     * **💬 Vervolgvragen stellen:** Onder het gegenereerde rapport kun je direct een vervolgvraag typen. De AI onthoudt de eerdere antwoorden en zoekt zonodig weer verder in het archief.
+
+    ---
+
+    ### ⚠️ Mogelijke Foutcodes & Status
+
+    * **`429 / RESOURCE_EXHAUSTED`**  
+      *Oorzaak:* De limiet van de Gemini API is tijdelijk bereikt (te veel verzoeken in korte tijd).  
+      *Oplossing:* Het systeem pauzeert automatisch en probeert het opnieuw. Blijft de fout bestaan? Wacht 1 tot 2 minuten of verlaag de slider *'Max dossiers'*.
+
+    * **`503 / UNAVAILABLE`**  
+      *Oorzaak:* De servers van Google Gemini zijn tijdelijk overbelast.  
+      *Oplossing:* Het systeem voert automatisch retries uit. Probeer het anders na een paar seconden nogmaals met de knop *'Voer onderzoek uit'*.
+
+    * **`APIKeyMissing / AuthError`**  
+      *Oorzaak:* De Google Cloud of Gemini API-sleutel ontbreekt in de Streamlit Secrets.  
+      *Oplossing:* Controleer `.streamlit/secrets.toml` of de instellingen op Streamlit Cloud.
+
+    * **`HttpError 404 / File Not Found`**  
+      *Oorzaak:* Een bestand uit de Google Sheet staat niet (meer) in de gekoppelde Google Drive-map *'archieven'*.  
+      *Oplossing:* Controleer of de bestandsnaam in de Google Sheet exact overeenkomt met de bestandsnaam in Drive.
+
+    * **`ValueError: Invalid placeholder`**  
+      *Oorzaak:* Een conflict tussen Python's `string.Template` en JavaScript `${...}` variabelen.  
+      *Oplossing:* Gebruik dubbele dollartekens (`$$`) voor JavaScript-variabelen in HTML-templates.
     """)
 
 # DIRECTE SCHOONMAAK BIJ KLIK OP NIEUW ONDERZOEK
@@ -703,7 +727,7 @@ GEBRUIKERSVRAAG: {st.session_state.huidige_vraag}
 STRUCTUUREISEN VOOR HET RAPPORT:
 - Geef direct en expliciet antwoord op de gestelde vraag.
 - Vermeld ALLE concrete namen, bedragen, datums, tijdschriftnummers en locaties die in de bronnen voorkomen.
-- Als er sprake is van betalingen of schadeclaims: vermeld zowel het totaalbedrag als de specifieke personen of posten waaraan werd uitbetaald.
+- Als er sprake is van betalingen en schadeclaims: vermeld zowel het totaalbedrag als de specifieke personen of posten waaraan werd uitbetaald.
 - Bied bij chronologische of financiële vragen een duidelijke tijdslijn of tabeloverzicht.
 - Sluit af met een korte, heldere synthese.
 """

@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.2.8 (Directe Scherm-Schoonmaak & Uitgebreide Foutcodes)"
+APP_VERSION = "v2.2.9 (Uniforme Foutcodes Lay-out)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -181,27 +181,13 @@ with st.expander("💡 Handige tips voor het testen & Foutcodes"):
 
     ---
 
-    ### ⚠️ Mogelijke Foutcodes & Status
+    ⚠️ **Mogelijke Foutcodes & Status**
 
-    * **`429 / RESOURCE_EXHAUSTED`**  
-      *Oorzaak:* De limiet van de Gemini API is tijdelijk bereikt (te veel verzoeken in korte tijd).  
-      *Oplossing:* Het systeem pauzeert automatisch en probeert het opnieuw. Blijft de fout bestaan? Wacht 1 tot 2 minuten of verlaag de slider *'Max dossiers'*.
-
-    * **`503 / UNAVAILABLE`**  
-      *Oorzaak:* De servers van Google Gemini zijn tijdelijk overbelast.  
-      *Oplossing:* Het systeem voert automatisch retries uit. Probeer het anders na een paar seconden nogmaals met de knop *'Voer onderzoek uit'*.
-
-    * **`APIKeyMissing / AuthError`**  
-      *Oorzaak:* De Google Cloud of Gemini API-sleutel ontbreekt in de Streamlit Secrets.  
-      *Oplossing:* Controleer `.streamlit/secrets.toml` of de instellingen op Streamlit Cloud.
-
-    * **`HttpError 404 / File Not Found`**  
-      *Oorzaak:* Een bestand uit de Google Sheet staat niet (meer) in de gekoppelde Google Drive-map *'archieven'*.  
-      *Oplossing:* Controleer of de bestandsnaam in de Google Sheet exact overeenkomt met de bestandsnaam in Drive.
-
-    * **`ValueError: Invalid placeholder`**  
-      *Oorzaak:* Een conflict tussen Python's `string.Template` en JavaScript `${...}` variabelen.  
-      *Oplossing:* Gebruik dubbele dollartekens (`$$`) voor JavaScript-variabelen in HTML-templates.
+    * **`429 / RESOURCE_EXHAUSTED`:** De limiet van de Gemini API is tijdelijk bereikt (te veel verzoeken in korte tijd). Het systeem pauzeert automatisch en probeert het opnieuw. Blijft de fout bestaan? Wacht 1 tot 2 minuten of verlaag de slider *'Max dossiers'*.
+    * **`503 / UNAVAILABLE`:** De servers van Google Gemini zijn tijdelijk overbelast. Het systeem voert automatisch retries uit. Probeer het anders na een paar seconden nogmaals met de knop *'Voer onderzoek uit'*.
+    * **`APIKeyMissing / AuthError`:** De Google Cloud of Gemini API-sleutel ontbreekt in de Streamlit Secrets. Controleer `.streamlit/secrets.toml` of de instellingen op Streamlit Cloud.
+    * **`HttpError 404 / File Not Found`:** Een bestand uit de Google Sheet staat niet (meer) in de gekoppelde Google Drive-map *'archieven'*. Controleer of de bestandsnaam in de Google Sheet exact overeenkomt met de bestandsnaam in Drive.
+    * **`ValueError: Invalid placeholder`:** Een conflict tussen Python's `string.Template` en JavaScript `${...}` variabelen. Gebruik dubbele dollartekens (`$$`) voor JavaScript-variabelen in HTML-templates.
     """)
 
 # DIRECTE SCHOONMAAK BIJ KLIK OP NIEUW ONDERZOEK

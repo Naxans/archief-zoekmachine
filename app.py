@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.2.9 (Uniforme Foutcodes Lay-out)"
+APP_VERSION = "v2.3.1 (Aangepast: 'Fout' i.p.v. 'Foutcode')"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -167,28 +167,23 @@ with btn_col2:
     stop_button = st.button("⛔ Stop / Annuleer", type="secondary", use_container_width=True)
 
 # ------------------------------------------------------------------------------
-# INFORMATIE BALK / TIPS VOOR DE GEBRUIKER
+# INFORMATIE BALK / TIPS & FOUTEN VOOR DE GEBRUIKER
 # ------------------------------------------------------------------------------
-with st.expander("💡 Handige tips voor het testen & Foutcodes"):
+with st.expander("💡 Handige tips voor het testen & Fouten"):
     st.markdown("""
-    * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken (zoals *"Geef alle informatie over RBC"*). Bij een te brede vraag worden er erg veel documenten gevonden, waardoor Gemini veel tijd nodig heeft om alles te analyseren. Vragen naar specifieke namen, jaartallen of onderwerpen werken het snelst en het beste.
+    * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken (zoals *"Geef alle informatie over RBC"*). Bei een te brede vraag worden er erg veel documenten gevonden, waardoor Gemini veel tijd nodig heeft om alles te analyseren. Vragen naar specifieke namen, jaartallen of onderwerpen werken het snelst en het beste.
     * **Knop '🔍 Voer onderzoek uit':** Hiermee start je de zoekopdracht. De AI gaat dan direct de relevante documenten en afbeeldingen analyseren.
     * **Knop '⛔ Stop / Annuleer':** Mocht een zoekopdracht te lang duren of wil je halverwege stoppen, dan kun je hiermee het proces meteen afbreken.
     * **Schuifregelaar 'Max dossiers (Document_ID's)':** Hiermee bepaal je hoeveel verschillende archiefmappen/documenten de AI maximaal mag bekijken.
         * **Laag zetten (bijv. 5 tot 10):** Ideaal voor snelle vragen. De AI is sneller klaar en gebruikt minder capaciteit.
         * **Hoog zetten (bijv. 30 tot 50):** Handig voor ingewikkelde vragen waarbij de informatie verspreid kan liggen over meerdere documenten. Het analyseren duurt dan wel wat langer.
     * **💬 Vervolgvragen stellen:** Onder het gegenereerde rapport kun je direct een vervolgvraag typen. De AI onthoudt de eerdere antwoorden en zoekt zonodig weer verder in het archief.
-
-    ---
-
-    ⚠️ **Mogelijke Foutcodes & Status**
-
-    * **`429 / RESOURCE_EXHAUSTED`:** De limiet van de Gemini API is tijdelijk bereikt (te veel verzoeken in korte tijd). Het systeem pauzeert automatisch en probeert het opnieuw. Blijft de fout bestaan? Wacht 1 tot 2 minuten of verlaag de slider *'Max dossiers'*.
-    * **`503 / UNAVAILABLE`:** De servers van Google Gemini zijn tijdelijk overbelast. Het systeem voert automatisch retries uit. Probeer het anders na een paar seconden nogmaals met de knop *'Voer onderzoek uit'*.
-    * **`APIKeyMissing / AuthError`:** De Google Cloud of Gemini API-sleutel ontbreekt in de Streamlit Secrets. Controleer `.streamlit/secrets.toml` of de instellingen op Streamlit Cloud.
-    * **`HttpError 404 / File Not Found`:** Een bestand uit de Google Sheet staat niet (meer) in de gekoppelde Google Drive-map *'archieven'*. Controleer of de bestandsnaam in de Google Sheet exact overeenkomt met de bestandsnaam in Drive.
-    * **`ValueError: Invalid placeholder`:** Een conflict tussen Python's `string.Template` en JavaScript `${...}` variabelen. Gebruik dubbele dollartekens (`$$`) voor JavaScript-variabelen in HTML-templates.
-    """)
+    * <code style="color: #0d7d3d; font-weight: bold; background-color: #f0f7f2; padding: 2px 5px; border-radius: 3px;">Fout 429 / RESOURCE_EXHAUSTED:</code> De limiet van de Gemini API is tijdelijk bereikt (te veel verzoeken in korte tijd). Het systeem pauzeert automatisch en probeert het opnieuw. Blijft de fout bestaan? Wacht 1 tot 2 minuten of verlaag de slider *'Max dossiers'*.
+    * <code style="color: #0d7d3d; font-weight: bold; background-color: #f0f7f2; padding: 2px 5px; border-radius: 3px;">Fout 503 / UNAVAILABLE:</code> De servers van Google Gemini zijn tijdelijk overbelast. Het systeem voert automatisch retries uit. Probeer het anders na een paar seconden nogmaals met de knop *'Voer onderzoek uit'*.
+    * <code style="color: #0d7d3d; font-weight: bold; background-color: #f0f7f2; padding: 2px 5px; border-radius: 3px;">Fout APIKeyMissing / AuthError:</code> De Google Cloud of Gemini API-sleutel ontbreekt in de Streamlit Secrets. Controleer `.streamlit/secrets.toml` of de instellingen op Streamlit Cloud.
+    * <code style="color: #0d7d3d; font-weight: bold; background-color: #f0f7f2; padding: 2px 5px; border-radius: 3px;">Fout HttpError 404 / File Not Found:</code> Een bestand uit de Google Sheet staat niet (meer) in de gekoppelde Google Drive-map *'archieven'*. Controleer of de bestandsnaam in de Google Sheet exact overeenkomt met de bestandsnaam in Drive.
+    * <code style="color: #0d7d3d; font-weight: bold; background-color: #f0f7f2; padding: 2px 5px; border-radius: 3px;">Fout ValueError: Invalid placeholder:</code> Een conflict tussen Python's `string.Template` en JavaScript `${...}` variabelen. Gebruik dubbele dollartekens (`$$`) voor JavaScript-variabelen in HTML-templates.
+    """, unsafe_allow_html=True)
 
 # DIRECTE SCHOONMAAK BIJ KLIK OP NIEUW ONDERZOEK
 if submit_button:
@@ -330,7 +325,6 @@ Geef UITSLUITEND een geldig JSON-object terug:
             harde_namen = st.session_state.harde_naam_targets
             vraag_type = st.session_state.vraag_type
 
-            # FASE 1: Groepeer eerst alle teksten per uniek Document_ID
             dossiers_geaggregeerd = {}
             for row in data:
                 b_naam = str(row.get('Bestandsnaam', '')).strip()
@@ -351,7 +345,6 @@ Geef UITSLUITEND een geldig JSON-object terug:
                 dossiers_geaggregeerd[doc_id]["onderwerpen"].append(normaliseer_tekst(row.get('Onderwerp (NL)') or row.get('Onderwerp') or ''))
                 dossiers_geaggregeerd[doc_id]["inhouden"].append(normaliseer_tekst(row.get('Inhoud & Cijfers (NL)') or row.get('Inhoud & cijfers') or row.get('Inhoud') or ''))
 
-            # FASE 2: Bereken de score op het complete, samengevoegde dossier
             for doc_id, inhoud_data in dossiers_geaggregeerd.items():
                 alle_b_namen = " ".join(inhoud_data["bestandsnamen"])
                 alle_pers = " ".join(inhoud_data["personen"])

@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.3.1 (Aangepast: 'Fout' i.p.v. 'Foutcode')"
+APP_VERSION = "v2.4.0 (Gemini 2.5 / 2.0 Flash Update)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -71,10 +71,11 @@ SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
 def bepaal_werkend_model(client):
     kandidaten = [
-        'gemini-2.5-flash-lite', 
-        'gemini-2.0-flash-lite', 
-        'gemini-flash-lite-latest', 
-        'gemini-flash-latest'
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-2.0-flash',
+        'gemini-2.0-flash-lite',
+        'gemini-1.5-flash'
     ]
     for model_naam in kandidaten:
         try:
@@ -82,7 +83,7 @@ def bepaal_werkend_model(client):
             return model_naam
         except Exception:
             continue
-    return 'gemini-flash-latest'
+    return 'gemini-2.5-flash'
 
 MODEL_NAAM = bepaal_werkend_model(ai_client)
 
@@ -171,7 +172,7 @@ with btn_col2:
 # ------------------------------------------------------------------------------
 with st.expander("💡 Handige tips voor het testen & Fouten"):
     st.markdown("""
-    * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken (zoals *"Geef alle informatie over RBC"*). Bei een te brede vraag worden er erg veel documenten gevonden, waardoor Gemini veel tijd nodig heeft om alles te analyseren. Vragen naar specifieke namen, jaartallen of onderwerpen werken het snelst en het beste.
+    * **Stel specifieke vragen:** Probeer de vraag niet te algemeen te maken (zoals *"Geef alle informatie over RBC"*). Bij een te brede vraag worden er erg veel documenten gevonden, waardoor Gemini veel tijd nodig heeft om alles te analyseren. Vragen naar specifieke namen, jaartallen of onderwerpen werken het snelst en het beste.
     * **Knop '🔍 Voer onderzoek uit':** Hiermee start je de zoekopdracht. De AI gaat dan direct de relevante documenten en afbeeldingen analyseren.
     * **Knop '⛔ Stop / Annuleer':** Mocht een zoekopdracht te lang duren of wil je halverwege stoppen, dan kun je hiermee het proces meteen afbreken.
     * **Schuifregelaar 'Max dossiers (Document_ID's)':** Hiermee bepaal je hoeveel verschillende archiefmappen/documenten de AI maximaal mag bekijken.

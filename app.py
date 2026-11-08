@@ -20,7 +20,7 @@ from google.genai import types
 # ------------------------------------------------------------------------------
 # APP VERSIEBEHEER
 # ------------------------------------------------------------------------------
-APP_VERSION = "v2.4.1 (Gemini 3.8 Flash Update)"
+APP_VERSION = "v2.4.2 (Gemini 3.5 Flash lite Update)"
 APP_DATE = "2026"
 
 logging.getLogger("google_genai").setLevel(logging.ERROR)
@@ -71,7 +71,6 @@ SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
 def bepaal_werkend_model(client):
     kandidaten = [
-        #'gemini-3.8-flash',
         'gemini-3.5-flash-lite',
         'gemini-2.0-flash',
         'gemini-2.0-flash-lite',

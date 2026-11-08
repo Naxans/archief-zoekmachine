@@ -71,7 +71,8 @@ SHEET_NAAM = f"Inhoudsopgave_{DRIVE_MAP_NAAM}"
 
 def bepaal_werkend_model(client):
     kandidaten = [
-        'gemini-3.8-flash',
+        #'gemini-3.8-flash',
+        'gemini-3.5-flash-lite',
         'gemini-2.0-flash',
         'gemini-2.0-flash-lite',
         'gemini-1.5-flash'
@@ -82,7 +83,7 @@ def bepaal_werkend_model(client):
             return model_naam
         except Exception:
             continue
-    return 'gemini-3.8-flash'
+    return 'gemini-3.5-flash-lite'
 
 MODEL_NAAM = bepaal_werkend_model(ai_client)
 
